@@ -1,0 +1,2768 @@
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { Users, User, Send, Pencil, Check, ShieldCheck, Lock, Settings, X, Flame, EyeOff, Minus, Plus, Sun, Monitor, Info, Search, Smile, Paperclip, File as FileIcon, Reply, Undo2, Forward, Pin, Bell, BellOff, Trash2, Hand, Upload, Image as ImageIcon, Type, RefreshCw, CircleHelp, Network, UserPlus, Crown, ChevronDown, Copy, Camera, History } from 'lucide-react'
+
+const api = window.api
+const FIELD = 'field w-full rounded-lg px-3 py-2 text-sm outline-none'
+const EMOJIS = ['\u{1F604}', '\u{1F602}', '\u{1F60A}', '\u{1F60D}', '\u{1F60E}', '\u{1F914}', '\u{1F44D}', '\u{1F64F}', '\u{1F389}', '\u2764\uFE0F', '\u{1F525}', '\u{1F629}', '\u{1F628}', '\u{1F62D}', '\u{1F44F}', '\u{1F64C}', '\u{1F4AA}', '\u2728', '\u{1F680}', '\u{1F31F}', '\u{1F614}', '\u{1F917}', '\u{1F440}', '\u{1F4B4}', '\u{1F923}', '\u{1F604}', '\u{1F626}', '\u{1F61D}', '\u{1F92C}', '\u{1F62D}', '\u{1F44B}', '\u2705', '\u2764', '\u26A0\uFE0F', '\u{1F4AC}', '\u{1F4F8}', '\u{1F352}', '\u2600\uFE0F', '\u{1F431}', '\u{1F31B}']
+const AVATAR_PRESETS = ['#34c759', '#007aff', '#ff9500', '#ff2d55', '#af52de', '#5ac8fa', '#5856d6', '#8e8e93']
+const MSG_PAGE = 60 // 消息懒加载：每页渲染数量
+// 个人状态：绿色在线 / 红色忙碌 / 灰色离开
+const PRESENCE = [
+  { key: 'online', label: '在线', color: '#30d158' },
+  { key: 'busy', label: '忙碌', color: '#ff453a' },
+  { key: 'away', label: '离开', color: '#8e8e93' },
+]
+// 取联系人/成员的展示状态：离线灰色，在线时按对方广播的 presence 显示
+function presenceOf (p) {
+  if (!p || !p.online) return { key: 'offline', label: '离线', color: '#8e8e93' }
+  return PRESENCE.find((x) => x.key === p.presence) || PRESENCE[0]
+}
+
+function fmtTime (ts) { try { return new Date(ts).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }) } catch (_) { return '' } }
+
+function dayLabel (ts) {
+  const d = new Date(ts); const now = new Date()
+  const same = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
+  if (same(d, now)) return '今天'
+  const y = new Date(now); y.setDate(now.getDate() - 1)
+  if (same(d, y)) return '昨天'
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function avatarColor (key) {
+  let h = 0; const s = key || '?'
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0
+  return `hsl(${h % 360} 55% 50%)`
+}
+function avatarImageStyle (avatar) {
+  const zoom = Math.max(100, Math.min(240, avatar && avatar.zoom ? avatar.zoom : 120))
+  const x = Math.max(0, Math.min(100, avatar && avatar.x != null ? avatar.x : 50))
+  const y = Math.max(0, Math.min(100, avatar && avatar.y != null ? avatar.y : 50))
+  return { backgroundImage: `url("${avatar.imageDataUrl}")`, backgroundSize: zoom + '%', backgroundPosition: x + '% ' + y + '%' }
+}
+function Avatar ({ name, id, size = 30, dim, avatar }) {
+  if (avatar && avatar.type === 'image' && avatar.imageDataUrl) {
+    return <div className="avatar bg-center bg-no-repeat" style={{ width: size, height: size, opacity: dim ? 0.5 : 1, ...avatarImageStyle(avatar) }} />
+  }
+  const ch = (name || '?').trim().slice(0, 1).toUpperCase() || '?'
+  const text = avatar && avatar.type === 'text' && avatar.text ? avatar.text.trim().slice(0, 2).toUpperCase() : ch
+  const bg = avatar && (avatar.type === 'text' || avatar.type === 'preset') && avatar.color ? avatar.color : avatarColor(id || name)
+  return <div className="avatar" style={{ width: size, height: size, background: bg, fontSize: Math.round(size * 0.42), opacity: dim ? 0.5 : 1 }}>{text}</div>
+}
+
+function resolveTheme (t) {
+  if (t === 'light' || t === 'dark') return t
+  return (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light'
+}
+function applyDisplay (d) {
+  const root = document.documentElement
+  root.setAttribute('data-theme', resolveTheme(d.theme))
+  root.setAttribute('data-style', d.uiStyle || 'classic')
+  root.style.setProperty('--font-px', (d.fontPx || 15) + 'px')
+  root.style.setProperty('--chat-font', d.chatFont && d.chatFont.trim() ? d.chatFont : 'inherit')
+  root.style.setProperty('--chat-font-px', (d.chatFontPx || 13.5) + 'px') // 仅作用于聊天气泡
+}
+
+// 聊天字体：五种常见中文字体（Windows 自带）
+const CHAT_FONTS = [
+  { label: '微软雅黑', family: '"Microsoft YaHei", sans-serif' },
+  { label: '宋体', family: 'SimSun, serif' },
+  { label: '黑体', family: 'SimHei, sans-serif' },
+  { label: '楷体', family: 'KaiTi, serif' },
+  { label: '仿宋', family: 'FangSong, serif' },
+]
+
+// 聊天 UI 风格：仅换肤，不改排版。colors 用于预览；classic 为经典样式。
+const UI_STYLES = [
+  { key: 'classic', label: '经典', colors: ['#7c86f0', '#1a1c28'] },
+  { key: 'minimal', label: '极简', colors: ['#1d7bff', '#ffffff'] },
+  { key: 'material', label: '材料', colors: ['#7c4dff', '#fafafa'] },
+  { key: 'dark', label: '暗色', colors: ['#7c5cff', '#0a0a0c'] },
+  { key: 'skeuo', label: '拟物', colors: ['#4caf50', '#e8dec9'] },
+  { key: 'glass', label: '磨砂', colors: ['#a855f7', '#1a1030'] },
+  { key: 'flat', label: '扁平', colors: ['#00897b', '#ffffff'] },
+  { key: 'neu', label: '柔和', colors: ['#5b7cfa', '#e6e9f0'] },
+  { key: 'gradient', label: '渐变', colors: ['#8b5cf6', '#f649a7'] },
+  { key: 'card', label: '卡片', colors: ['#1d7bff', '#e9ecf1'] },
+  { key: 'hand', label: '手绘', colors: ['#2b2b2b', '#fdf6e3'] },
+]
+
+function WinBtns () {
+  if (!api || !api.win) return null
+  return (
+    <div className="win-controls no-drag flex items-center">
+      <button className="win-btn" title="最小化" onClick={() => api.win.minimize()}><Minus size={14} /></button>
+      <button className="win-btn" title="最大化/还原" onClick={() => api.win.maximize()}><Plus size={14} /></button>
+      <button className="win-btn win-close" title="关闭" onClick={() => api.win.close()}><X size={14} /></button>
+    </div>
+  )
+}
+function TopBar ({ self, onGlobalSearch }) {
+  return (
+    <div className="titlebar glass-bar flex items-center gap-3 px-4 border-b bd-soft shrink-0" style={{ height: 46 }}>
+      <span className="text-[13px] font-semibold txt">iLink</span>
+      <span className="inline-flex items-center gap-1.5 text-[11.5px] accent-txt px-2.5 py-1 rounded-full font-semibold" style={{ background: 'var(--accent-tint)' }}>
+        <Lock size={11} strokeWidth={2.5} /> 端到端加密
+      </span>
+      {self && self.localIp && (
+        <span className="text-[11px] shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full" style={{ background: 'var(--hover)' }}>
+          <span className="txt-dim">IP</span>
+          <span className="txt font-mono tracking-wide">{self.localIp}</span>
+        </span>
+      )}
+      <div className="ml-auto flex items-center gap-0.5">
+        {onGlobalSearch && (
+          <button onClick={onGlobalSearch} className="btn-ghost no-drag shrink-0 inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11.5px] txt-dim">
+            <Search size={13} /> 全局搜索
+          </button>
+        )}
+        <WinBtns />
+      </div>
+    </div>
+  )
+}
+
+function Center ({ children }) { return <div className="flex-1 flex items-center justify-center p-8">{children}</div> }
+function Badge ({ n, corner, muted }) {
+  if (!n) return null
+  // corner:瑙掓爣妯″紡,璐村湪头像鍙充笂瑙?muted:免打扰会话用灰色弱化
+  return (
+    <span
+      className={(corner ? 'absolute -top-1 -right-1 z-10 min-w-[16px] h-[16px] text-[9.5px] ' : 'ml-auto min-w-[18px] h-[18px] text-[10px] ') + (muted ? 'badge-muted ' : 'bg-red-500 ') + 'badge-pop px-1 rounded-full text-white font-medium flex items-center justify-center'}
+      style={corner ? { boxShadow: '0 0 0 2px rgb(var(--panel-rgb))' } : undefined}
+    >{n > 99 ? '99+' : n}</span>
+  )
+}
+function GroupAvatar ({ group, size = 30 }) {
+  if (group && group.avatar) return <Avatar name={group.name || '群'} id={group.id} avatar={group.avatar} size={size} />
+  return <div className="avatar" style={{ width: size, height: size, background: "linear-gradient(135deg, var(--accent), #8e8ff1)" }}><Users size={Math.round(size / 2)} color="#fff" /></div>
+}
+function Toggle ({ on, onClick }) {
+  return <button onClick={onClick} className={'w-10 h-5 rounded-full transition relative shrink-0 ' + (on ? 'bg-emerald-500' : 'bg-black/20')}><span className={'absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ' + (on ? 'left-5' : 'left-0.5')} /></button>
+}
+function Row ({ label, hint, children }) {
+  return <div className="flex items-center justify-between py-2 gap-3"><div><div className="text-sm txt">{label}</div>{hint && <div className="text-[11px] txt-dim">{hint}</div>}</div>{children}</div>
+}
+// 设置：功能卡片，与整体磨砂风格一致
+function SettingsCard ({ title, icon: Icon, danger, children }) {
+  return (
+    <div className="rounded-2xl p-4 mb-3" style={{ background: 'var(--hover)', border: '1px solid var(--border-soft)' }}>
+      {title && <div className={'text-[11px] uppercase tracking-wide mb-1 inline-flex items-center gap-1.5 ' + (danger ? 'text-red-400/80' : 'txt-dim')}>{Icon && <Icon size={13} />} {title}</div>}
+      {children}
+    </div>
+  )
+}
+function Overlay ({ children, onClose }) {
+  return <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/40 p-6" onClick={onClose}><div onClick={(e) => e.stopPropagation()} className="max-h-full overflow-auto">{children}</div></div>
+}
+function ConfirmDialog ({ title, text, confirmText = '确认', onConfirm, onClose }) {
+  return (
+    <Overlay onClose={onClose}>
+      <div className="w-80 glass-panel rounded-2xl p-5">
+        <div className="text-sm font-semibold txt">{title}</div>
+        <div className="mt-2 text-xs txt-dim leading-relaxed">{text}</div>
+        <div className="mt-4 flex justify-end gap-2">
+          <button onClick={onClose} className="btn-ghost text-sm rounded-lg px-3 py-1.5">取消</button>
+          <button onClick={onConfirm} className="bg-red-500 text-white text-sm rounded-lg px-3 py-1.5">{confirmText}</button>
+        </div>
+      </div>
+    </Overlay>
+  )
+}
+
+// 用 canvas 将任意可显示图片压成正方形 JPEG，兼容 webp/gif 等 nativeImage 不支持的格式
+function compressImageDataUrl (dataUrl, size = 96, quality = 0.78) {
+  return new Promise((resolve) => {
+    try {
+      const img = new Image()
+      img.onload = () => {
+        try {
+          const canvas = document.createElement('canvas')
+          canvas.width = size; canvas.height = size
+          const ctx = canvas.getContext('2d')
+          const s = Math.min(img.width, img.height) // 居中裁剪成正方形
+          ctx.drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, size, size)
+          resolve(canvas.toDataURL('image/jpeg', quality))
+        } catch (_) { resolve(null) }
+      }
+      img.onerror = () => resolve(null)
+      img.src = dataUrl
+    } catch (_) { resolve(null) }
+  })
+}
+
+// 复制文本：优先 Clipboard API，失败时回退 execCommand
+function copyText (text) {
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).catch(() => fallbackCopy(text))
+      return
+    }
+  } catch (_) {}
+  fallbackCopy(text)
+}
+function fallbackCopy (text) {
+  try {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.style.position = 'fixed'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.select()
+    document.execCommand('copy')
+    document.body.removeChild(ta)
+  } catch (_) {}
+}
+
+function fmtSize (n) {
+  if (!n) return '0 B'
+  const u = ['B', 'KB', 'MB', 'GB']; let i = 0; let v = n
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++ }
+  return v.toFixed(i ? 1 : 0) + ' ' + u[i]
+}
+
+function FileMsg ({ m, progress, onAccept, onReject, selfAvatar, peerAvatar, avatarSpacer, hideMeta, metaReactions }) {
+  const isImg = m.mime && m.mime.indexOf('image/') === 0
+  const offer = m.type === 'file-offer'
+  const pct = progress && progress.size ? Math.min(100, Math.round((progress.received / progress.size) * 100)) : null
+  const avatarName = m.self ? '?' : (m.name || '')
+  const avatarId = m.self ? (m.from || 'self') : (m.from || m.name || '')
+  const avatarData = m.self ? selfAvatar : (peerAvatar || m.avatar)
+  const rx = metaReactions !== undefined ? metaReactions : (m.reactions || {})
+  const avEl = avatarSpacer ? <span className="avatar-spacer" /> : <Avatar name={avatarName} id={avatarId} avatar={avatarData} size={34} />
+  return (
+    <div className={'group message-row ' + (m.self ? 'message-row-self' : 'message-row-other')}>
+      {!m.self && avEl}
+      <div className="message-stack max-w-[75%]">
+        <div className={'rounded-2xl px-3 py-2 text-sm ' + (m.self ? 'bubble-self' : 'bubble-other')}>
+        {(m.scope === 'group' || m.scope === 'room') && !m.self && m.name && <div className="text-[11px] font-medium accent-txt mb-0.5">{m.name}</div>}
+        {isImg && m.dataUrl ? (
+          <img src={m.dataUrl} alt={m.fname} onClick={() => m.path && api.file.open(m.path)} className="rounded-lg max-w-[240px] max-h-60 object-contain cursor-pointer" />
+        ) : (
+          <div className="flex items-center gap-2">
+            <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: 'rgba(0,0,0,0.18)' }}><FileIcon size={18} /></div>
+            <div className="min-w-0"><div className="truncate font-medium">{m.fname}</div><div className="text-[11px] opacity-70">{fmtSize(m.size)}</div></div>
+          </div>
+        )}
+        {pct != null && pct < 100 && <div className="mt-1 h-1 rounded bg-black/20 overflow-hidden"><div className="h-full bg-white/70" style={{ width: pct + '%' }} /></div>}
+        {offer && <div className="mt-2 flex gap-2"><button onClick={() => onAccept(m.mid)} className="btn-primary text-xs rounded px-2 py-1">接收</button><button onClick={() => onReject(m.mid)} className="btn-ghost text-xs rounded px-2 py-1">拒绝</button></div>}
+          {!offer && m.path && <div className="mt-1 flex gap-3 text-[11px] opacity-70"><button onClick={() => api.file.open(m.path)} className="hover:underline">打开</button><button onClick={() => api.file.showInFolder(m.path)} className="hover:underline">打开所在文件夹</button></div>}
+        </div>
+        {!hideMeta && (
+          <div className="message-meta">
+            {Object.keys(rx).length > 0 && (
+              <div className="message-reactions">{Object.entries(rx).map(([e, ids]) => <span key={e} className="message-reaction">{e} {ids.length}</span>)}</div>
+            )}
+            <span className="message-time">{fmtTime(m.ts)}</span>
+          </div>
+        )}
+      </div>
+      {m.self && avEl}
+    </div>
+  )
+}
+
+function BatchMsg ({ items, markdown, showName, selfAvatar, peerAvatar, progressMap, flashMid, onCtx, avatarSpacer, hideMeta, metaReactions }) {
+  const first = items[0]
+  const selfMsg = !!first.self
+  const texts = items.filter((x) => x.type !== 'file' && x.type !== 'file-offer' && x.text)
+  const allFiles = items.filter((x) => x.type === 'file')
+  const imgs = allFiles.filter((f) => f.mime && f.mime.indexOf('image/') === 0 && f.dataUrl)
+  const others = allFiles.filter((f) => !(f.mime && f.mime.indexOf('image/') === 0 && f.dataUrl))
+  const avatarName = selfMsg ? '?' : (first.name || '')
+  const avatarId = selfMsg ? (first.from || 'self') : (first.from || first.name || '')
+  const avatarData = selfMsg ? selfAvatar : (peerAvatar || first.avatar)
+  // 合并所有条目的表情回应，外部传入 metaReactions 时优先使用
+  let reactions = {}
+  if (metaReactions !== undefined) reactions = metaReactions
+  else {
+    for (const it of items) {
+      for (const [e, ids] of Object.entries(it.reactions || {})) {
+        reactions[e] = Array.from(new Set([...(reactions[e] || []), ...ids]))
+      }
+    }
+  }
+  const ctxProps = (m) => ({ 'data-mid': m.mid || undefined, onContextMenu: (e) => onCtx && onCtx(m, e) })
+  const avEl = avatarSpacer ? <span className="avatar-spacer" /> : <Avatar name={avatarName} id={avatarId} avatar={avatarData} size={34} />
+  return (
+    <div className={'message-row ' + (selfMsg ? 'message-row-self' : 'message-row-other')}>
+      {!selfMsg && avEl}
+      <div className="message-stack max-w-[75%]">
+        {/* 无文字时，群内昵称单独显示在附件上方 */}
+        {showName && texts.length === 0 && <div className="text-[11px] font-medium accent-txt">{first.name}</div>}
+        {/* 绗竴琛?图片缂╃暐鍥?*/}
+        {imgs.length > 0 && (
+          <div className="batch-grid batch-grid-bare">
+            {imgs.map((f) => (
+              <img key={f.mid} {...ctxProps(f)} src={f.dataUrl} alt={f.fname} title={f.fname} onClick={() => f.path && api.file.open(f.path)} className={'batch-thumb ' + (flashMid === f.mid ? 'msg-flash-outline' : '')} />
+            ))}
+          </div>
+        )}
+        {/* 第二行：其他文件 */}
+        {others.length > 0 && (
+          <div className="batch-grid batch-grid-bare">
+            {others.map((f) => {
+              const prog = progressMap[f.mid]
+              const pct = prog && prog.size ? Math.min(100, Math.round((prog.received / prog.size) * 100)) : null
+              return (
+                <button key={f.mid} {...ctxProps(f)} onClick={() => f.path && api.file.open(f.path)} title={f.fname} className={'batch-file batch-file-card ' + (flashMid === f.mid ? 'msg-flash-outline' : '')}>
+                  <span className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0" style={{ background: 'var(--accent-tint)' }}><FileIcon size={14} className="accent-txt" /></span>
+                  <span className="min-w-0 text-left">
+                    <span className="block truncate max-w-[150px]">{f.fname}</span>
+                    <span className="block opacity-70 text-[10px]">{fmtSize(f.size)}</span>
+                  </span>
+                  {pct != null && pct < 100 && <span className="batch-file-progress" style={{ width: pct + '%' }} />}
+                </button>
+              )
+            })}
+          </div>
+        )}
+        {/* 聊天气泡：只放文字消息 */}
+        {texts.length > 0 && (
+          <div className={'rounded-2xl px-3 py-2 text-sm ' + (selfMsg ? 'bubble-self' : 'bubble-other')}>
+            {showName && <div className="text-[11px] font-medium accent-txt mb-0.5">{first.name}</div>}
+            {texts.map((t) => (
+              <div key={t.mid} {...ctxProps(t)} className={'whitespace-pre-wrap break-words ' + (flashMid === t.mid ? 'msg-flash' : '')}>{renderRich(t.text || '', markdown)}</div>
+            ))}
+          </div>
+        )}
+        {!hideMeta && (
+          <div className="message-meta">
+            {Object.keys(reactions).length > 0 && (
+              <div className="message-reactions">{Object.entries(reactions).map(([e, ids]) => <span key={e} className="message-reaction">{e} {ids.length}</span>)}</div>
+            )}
+            <span className="message-time">{fmtTime(first.ts)}</span>
+          </div>
+        )}
+      </div>
+      {selfMsg && avEl}
+    </div>
+  )
+}
+
+// 合并同一发送分组内所有消息的表情回应
+function mergeMessageReactions (units) {
+  const out = {}
+  for (const u of units) {
+    for (const it of u.items) {
+      for (const [e, ids] of Object.entries(it.reactions || {})) {
+        out[e] = Array.from(new Set([...(out[e] || []), ...ids]))
+      }
+    }
+  }
+  return out
+}
+
+const REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏', '🔥', '🎉']
+function openUrl (u) { if (api && api.sys) api.sys.openExternal(u) }
+
+function renderRich (text, markdown) {
+  const out = []
+  let key = 0
+  const re = markdown
+    ? /(\*\*[^*\n]+\*\*|`[^`\n]+`|\*[^*\n]+\*|https?:\/\/[^\s]+|@[^\s@]{1,24})/g
+    : /(https?:\/\/[^\s]+|@[^\s@]{1,24})/g
+  let last = 0; let mt
+  re.lastIndex = 0
+  while ((mt = re.exec(text)) !== null) {
+    if (mt.index > last) out.push(<span key={key++}>{text.slice(last, mt.index)}</span>)
+    const tok = mt[0]
+    if (/^https?:\/\//.test(tok)) out.push(<a key={key++} onClick={() => openUrl(tok)} className="underline cursor-pointer break-all">{tok}</a>)
+    else if (tok[0] === '@') out.push(<span key={key++} className="mention">{tok}</span>)
+    else if (markdown && tok.startsWith('**')) out.push(<strong key={key++}>{tok.slice(2, -2)}</strong>)
+    else if (markdown && tok[0] === '`') out.push(<code key={key++} className="px-1 rounded" style={{ background: 'rgba(0,0,0,0.2)' }}>{tok.slice(1, -1)}</code>)
+    else if (markdown && tok[0] === '*') out.push(<em key={key++}>{tok.slice(1, -1)}</em>)
+    else out.push(<span key={key++}>{tok}</span>)
+    last = mt.index + tok.length
+  }
+  if (last < text.length) out.push(<span key={key++}>{text.slice(last)}</span>)
+  return out
+}
+
+function Bubble ({ m, now, showName, markdown, selectMode, selected, onToggleSelect, selfAvatar, peerAvatar, avatarSpacer, hideMeta, metaReactions }) {
+  // 阅后即焚：剩余时间占比(0~1)，用于进度条展示
+  const burnTotal = (m.ttl || 10) * 1000
+  const burnFrac = m.burn ? Math.max(0, Math.min(1, (m.ts + burnTotal - now) / burnTotal)) : 0
+  const cls = m.burn ? 'bubble-burn' : (m.self ? 'bubble-self' : 'bubble-other')
+  const avatarName = m.self ? '?' : (m.name || '')
+  const avatarId = m.self ? (m.from || 'self') : (m.from || m.name || '')
+  const avatarData = m.self ? selfAvatar : (peerAvatar || m.avatar)
+  const rx = metaReactions !== undefined ? metaReactions : (m.reactions || {})
+  const avEl = avatarSpacer ? <span className="avatar-spacer" /> : <Avatar name={avatarName} id={avatarId} avatar={avatarData} size={34} />
+  return (
+    <div className={'group message-row ' + (m.self ? 'message-row-self' : 'message-row-other')}>
+      {selectMode && <input type="checkbox" checked={!!selected} onChange={() => onToggleSelect(m.mid)} className="accent-emerald-500" />}
+      {!m.self && avEl}
+      <div className="message-stack max-w-[75%]">
+      <div className={'rounded-2xl px-3 py-2 text-sm ' + cls}>
+        {showName && <div className="text-[11px] font-medium accent-txt mb-0.5">{m.name}</div>}
+        {m.fwd && <div className="text-[10.5px] opacity-75 mb-0.5 inline-flex items-center gap-1"><Forward size={10} /> 转发自 {m.fwd.name}{m.fwd.count ? `（共 ${m.fwd.count} 条）` : ''}</div>}
+        {m.reply && <div className="mb-1 px-2 py-1 rounded-lg text-[11px] opacity-80" style={{ borderLeft: '2px solid var(--accent)', background: 'rgba(0,0,0,0.12)' }}><span className="font-medium">{m.reply.name}</span>:{m.reply.text}</div>}
+        <div className="whitespace-pre-wrap break-words">{m.recalled ? <span className="italic opacity-60">[已撤回]</span> : renderRich(m.text || '', markdown)}</div>
+        {m.burn && <span className="burn-bar burn-bar-bubble"><span className="burn-bar-fill" style={{ width: (burnFrac * 100) + '%' }} /></span>}
+      </div>
+      {!hideMeta && (
+        <div className="message-meta">
+          {Object.keys(rx).length > 0 && (
+            <div className="message-reactions">{Object.entries(rx).map(([e, ids]) => <span key={e} className="message-reaction">{e} {ids.length}</span>)}</div>
+          )}
+          <span className="message-time">{fmtTime(m.ts)}</span>
+        </div>
+      )}
+      </div>
+      {m.self && avEl}
+    </div>
+  )
+}
+
+function ProfileDialog ({ person, editable, onRename, onClose }) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(person.name || '')
+  async function save () { await onRename(draft); setEditing(false) }
+  return (
+    <Overlay onClose={onClose}>
+      <div className="w-72 glass-panel rounded-2xl p-6 text-center">
+        <div className="flex justify-center"><Avatar name={person.name} id={person.id} avatar={person.avatar} size={64} /></div>
+        {editable && editing ? (
+          <div className="mt-3 flex items-center justify-center gap-1">
+            <input value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') save() }} autoFocus className="field rounded-lg px-2 py-1 text-sm text-center w-40 outline-none" />
+            <button onClick={save} className="accent-txt"><Check size={16} /></button>
+          </div>
+        ) : (
+          <div className="mt-3 text-lg font-semibold txt inline-flex items-center gap-1 justify-center">{person.name}{editable && <button onClick={() => { setDraft(person.name); setEditing(true) }} className="txt-dim hover:opacity-70"><Pencil size={13} /></button>}</div>
+        )}
+        {typeof person.online === 'boolean' && <div className="mt-1 text-xs txt-dim">{person.online ? '在线' : '离线'}</div>}
+        {person.status && <div className="mt-1 text-xs accent-txt break-words">{person.status}</div>}
+        <div className="mt-4 text-left text-xs txt-dim space-y-1.5">
+          <div>ID:<span className="txt font-mono ml-1">{(person.id || '').slice(0, 18)}...</span></div>
+          {person.address && <div>地址:<span className="txt ml-1">{person.address}</span></div>}
+          {person.localIp && <div>本机 IP:<span className="txt ml-1">{person.localIp}</span></div>}
+          {person.pub && <div>公钥:<span className="txt font-mono ml-1">{person.pub.slice(0, 20)}...</span></div>}
+          {typeof person.hasKey === 'boolean' && <div>加密会话:<span className="txt ml-1">{person.hasKey ? '已就绪' : '等待对方公钥'}</span></div>}
+        </div>
+        <button onClick={onClose} className="btn-ghost mt-5 w-full rounded-lg py-2 text-sm">关闭</button>
+      </div>
+    </Overlay>
+  )
+}
+
+// ---------------------------------------------------------------------------
+function SetupScreen ({ onDone }) {
+  const [pw, setPw] = useState(''); const [pw2, setPw2] = useState(''); const [err, setErr] = useState(null); const [busy, setBusy] = useState(false)
+  async function submit () {
+    setErr(null)
+    if (pw.length < 4) return setErr('密码至少 4 位')
+    if (pw !== pw2) return setErr('两次输入不一致')
+    setBusy(true); const res = await api.auth.setup(pw); setBusy(false)
+    if (res && res.ok) onDone(res.identity); else setErr((res && res.error) || '设置失败')
+  }
+  return (
+    <div className="auth-surface h-full flex flex-col">
+      <TopBar />
+      <Center>
+        <div className="w-full max-w-sm glass-panel rounded-2xl p-7">
+          <div className="flex items-center gap-2 accent-txt"><ShieldCheck size={20} /><span className="text-sm font-medium">iLink · 首次设置</span></div>
+          <h1 className="mt-3 text-xl font-semibold txt">首次使用，请设置主密码</h1>
+          <p className="mt-1 text-xs txt-dim leading-relaxed">主密码会加密本地身份、密钥和聊天记录，不会上传，且无法找回。</p>
+          <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="主密码" className={FIELD + ' mt-4'} autoFocus />
+          <input type="password" value={pw2} onChange={(e) => setPw2(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') submit() }} placeholder="再次输入" className={FIELD + ' mt-3'} />
+          {err && <div className="mt-3 text-xs text-red-400">{err}</div>}
+          <button onClick={submit} disabled={busy} className="btn-primary mt-5 w-full rounded-lg px-4 py-2.5 text-sm font-medium disabled:opacity-50">{busy ? '创建中...' : '创建身份'}</button>
+        </div>
+      </Center>
+    </div>
+  )
+}
+
+function UnlockScreen ({ onDone, onReset }) {
+  const [pw, setPw] = useState(''); const [err, setErr] = useState(null); const [busy, setBusy] = useState(false)
+  const [confirmReset, setConfirmReset] = useState(false); const [ack, setAck] = useState(false)
+  async function submit () { setErr(null); setBusy(true); const res = await api.auth.unlock(pw); setBusy(false); if (res && res.ok) onDone(res.identity); else setErr((res && res.error) || '设置失败') }
+  return (
+    <div className="auth-surface h-full flex flex-col">
+      <TopBar />
+      <Center>
+        <div className="w-full max-w-sm glass-panel rounded-2xl p-7">
+          <div className="flex items-center gap-2 accent-txt"><Lock size={20} /><span className="text-sm font-medium">iLink · 解锁</span></div>
+          <h1 className="mt-3 text-xl font-semibold txt">输入主密码解锁</h1>
+          <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') submit() }} placeholder="主密码" className={FIELD + ' mt-4'} autoFocus />
+          {err && <div className="mt-3 text-xs text-red-400">{err}</div>}
+          <button onClick={submit} disabled={busy} className="btn-primary mt-5 w-full rounded-lg px-4 py-2.5 text-sm font-medium disabled:opacity-50">{busy ? '解锁中...' : '解锁'}</button>
+          {!confirmReset ? (
+            <button onClick={() => setConfirmReset(true)} className="mt-4 text-xs txt-dim hover:opacity-80">重置身份...</button>
+          ) : (
+            <div className="mt-4 rounded-lg border border-red-500/30 bg-red-500/10 p-3">
+              <div className="text-xs text-red-400">此操作会永久删除身份和本地记录，且无法恢复。</div>
+              <label className="mt-2 flex items-center gap-2 text-xs txt-dim"><input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} /> 我已了解此操作不可恢复</label>
+              <div className="mt-2 flex gap-2">
+                <button onClick={async () => { await api.auth.resetIdentity(); onReset() }} disabled={!ack} className="text-xs bg-red-500 text-white rounded px-3 py-1.5 disabled:opacity-40">确认重置</button>
+                <button onClick={() => { setConfirmReset(false); setAck(false) }} className="text-xs txt-dim px-3 py-1.5">取消</button>
+              </div>
+            </div>
+          )}
+        </div>
+      </Center>
+    </div>
+  )
+}
+
+const SETTINGS_CATS = [
+  { key: 'appearance', label: '外观', icon: Sun },
+  { key: 'profile', label: '个人资料', icon: User },
+  { key: 'notify', label: '通知', icon: Bell },
+  { key: 'files', label: '文件', icon: FileIcon },
+  { key: 'network', label: '网络', icon: Network },
+  { key: 'privacy', label: '隐私', icon: ShieldCheck },
+  { key: 'about', label: '关于', icon: Info },
+]
+
+function SettingsPanel ({ settings, onPatch, onClose, onLock, onReset, onClearHistory, onClearDrafts }) {
+  const [cat, setCat] = useState('appearance')
+  const [oldPw, setOldPw] = useState(''); const [newPw, setNewPw] = useState(''); const [newPw2, setNewPw2] = useState('')
+  const [msg, setMsg] = useState(null); const [confirmReset, setConfirmReset] = useState(false); const [ack, setAck] = useState(false)
+  const [appInfo, setAppInfo] = useState(null)
+  const [avatarMsg, setAvatarMsg] = useState('')
+  const [updateMsg, setUpdateMsg] = useState('')
+  const s = settings || {}
+  const avatar = s.avatar || { type: 'text', text: '', color: '' }
+  const [udpDraft, setUdpDraft] = useState(String(s.udpPort || 51888))
+  const [broadcastDraft, setBroadcastDraft] = useState(s.broadcastAddrs || '')
+  useEffect(() => { setUdpDraft(String(s.udpPort || 51888)); setBroadcastDraft(s.broadcastAddrs || '') }, [s.udpPort, s.broadcastAddrs])
+  useEffect(() => { if (api && api.ping) api.ping().then((p) => setAppInfo(p)).catch(() => {}) }, [])
+  function patchSettings (patch) { onPatch({ avatar: { ...avatar, ...patch } }) }
+  async function pickAvatarImage () {
+    setAvatarMsg('')
+    if (!api.avatar || !api.avatar.pickImage) { setAvatarMsg('请重启窗口后再选择头像'); return }
+    const res = await api.avatar.pickImage()
+    if (res && res.ok) {
+      const compact = (await compressImageDataUrl(res.dataUrl, 192, 0.8)) || res.dataUrl
+      patchSettings({ type: 'image', imageDataUrl: compact, zoom: 120, x: 50, y: 50 })
+    } else if (res && res.error) setAvatarMsg(res.error)
+  }
+  function applyNetwork () {
+    const port = Math.max(1024, Math.min(65535, parseInt(udpDraft, 10) || 51888))
+    setUdpDraft(String(port))
+    onPatch({ udpPort: port, broadcastAddrs: broadcastDraft })
+  }
+  async function checkUpdate () {
+    setUpdateMsg('正在检查...')
+    const res = api.checkUpdate ? await api.checkUpdate() : null
+    setUpdateMsg((res && res.message) || '没有可用更新')
+  }
+  async function changePw () {
+    setMsg(null)
+    if (newPw.length < 4) return setMsg({ t: 'err', s: '新密码至少 4 位' })
+    if (newPw !== newPw2) return setMsg({ t: 'err', s: '两次输入不一致' })
+    const res = await api.auth.changePassword(oldPw, newPw)
+    if (res && res.ok) { setMsg({ t: 'ok', s: '密码已修改' }); setOldPw(''); setNewPw(''); setNewPw2('') } else setMsg({ t: 'err', s: (res && res.error) || '修改失败' })
+  }
+  return (
+    <Overlay onClose={onClose}>
+      <div className="w-[720px] max-w-[92vw] glass-panel rounded-2xl overflow-hidden flex flex-col" style={{ height: '78vh', maxHeight: 640 }}>
+        <div className="flex items-center justify-between px-5 border-b bd-soft shrink-0" style={{ height: 52 }}>
+          <h2 className="text-sm font-semibold txt inline-flex items-center gap-2"><Settings size={16} /> 设置</h2>
+          <button onClick={onClose} className="icon-btn"><X size={16} /></button>
+        </div>
+
+        <div className="flex flex-1 min-h-0">
+          {/* 左侧功能分类导航 */}
+          <div className="w-[150px] shrink-0 border-r bd-soft p-2 overflow-auto scroll">
+            {SETTINGS_CATS.map((c) => (
+              <button key={c.key} onClick={() => setCat(c.key)} className={'w-full flex items-center gap-2 px-3 py-2 mb-0.5 rounded-xl text-sm text-left ' + (cat === c.key ? 'side-item side-item-active' : 'side-item')}>
+                <c.icon size={15} /> <span className="truncate">{c.label}</span>
+              </button>
+            ))}
+          </div>
+
+          {/* 右侧内容 */}
+          <div className="flex-1 overflow-auto scroll p-5">
+            {cat === 'appearance' && (
+              <SettingsCard title="外观" icon={Sun}>
+                <Row label="字体大小"><select value={s.fontPx || 15} onChange={(e) => onPatch({ fontPx: parseInt(e.target.value, 10) })} className="field rounded px-2 py-1 text-sm"><option value={13}>Small</option><option value={15}>中号</option><option value={17}>Large</option></select></Row>
+                <div className="py-2">
+                  <div className="text-sm txt">主题风格</div>
+                  <div className="text-[11px] txt-dim">切换不同配色和界面风格</div>
+                  <div className="mt-2 grid grid-cols-5 gap-2">
+                    {UI_STYLES.map((st) => {
+                      const cur = (s.uiStyle || 'classic') === st.key
+                      return (
+                        <button key={st.key} onClick={() => onPatch({ uiStyle: st.key })} className="rounded-xl p-2 text-center transition" style={{ border: '1.5px solid ' + (cur ? 'var(--accent)' : 'var(--border-soft)'), background: cur ? 'var(--accent-tint)' : 'var(--hover)' }}>
+                          <span className="mx-auto block w-7 h-7 rounded-full" style={{ background: `linear-gradient(135deg, ${st.colors[0]} 0%, ${st.colors[0]} 48%, ${st.colors[1]} 52%, ${st.colors[1]} 100%)`, border: '1px solid rgba(128,128,128,0.3)', boxShadow: cur ? '0 0 0 2px var(--accent)' : 'none' }} />
+                          <div className={'mt-1.5 text-[10px] ' + (cur ? 'accent-txt font-semibold' : 'txt-dim')}>{st.label}</div>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              </SettingsCard>
+            )}
+
+            {cat === 'profile' && (
+              <>
+                <SettingsCard title="头像" icon={ImageIcon}>
+                  <div className="mt-1 flex items-center gap-4">
+                    <Avatar name="?" id="me" avatar={avatar} size={72} />
+                    <div className="flex-1 min-w-0 space-y-2">
+                      <div className="flex flex-wrap gap-2">
+                        <button onClick={pickAvatarImage} className="btn-ghost text-xs rounded-lg px-2 py-1.5 inline-flex items-center gap-1"><Upload size={13} /> 上传</button>
+                        <button onClick={() => patchSettings({ type: 'text', imageDataUrl: '', text: avatar.text || '', color: avatar.color || AVATAR_PRESETS[0] })} className="btn-ghost text-xs rounded-lg px-2 py-1.5 inline-flex items-center gap-1"><Type size={13} /> 文字</button>
+                        <button onClick={() => patchSettings({ type: 'preset', imageDataUrl: '', color: avatar.color || AVATAR_PRESETS[1] })} className="btn-ghost text-xs rounded-lg px-2 py-1.5 inline-flex items-center gap-1"><ImageIcon size={13} /> 预设</button>
+                      </div>
+                      {avatarMsg && <div className="text-xs text-red-400">{avatarMsg}</div>}
+                    </div>
+                  </div>
+                  {(avatar.type === 'text' || avatar.type === 'preset') && (
+                    <div className="mt-3 space-y-2">
+                      <Row label="头像文字" hint="最多 2 个字符"><input value={avatar.text || ''} maxLength={2} onChange={(e) => patchSettings({ type: 'text', text: e.target.value })} className="field w-20 rounded px-2 py-1 text-sm" placeholder="?" /></Row>
+                      <Row label="预设颜色"><div className="flex gap-1">{AVATAR_PRESETS.map((c) => <button key={c} onClick={() => patchSettings({ type: avatar.type === 'preset' ? 'preset' : 'text', color: c })} className="w-6 h-6 rounded-full border" style={{ background: c, borderColor: avatar.color === c ? 'var(--text)' : 'transparent' }} />)}</div></Row>
+                    </div>
+                  )}
+                  {avatar.type === 'image' && avatar.imageDataUrl && (
+                    <div className="mt-3 space-y-2">
+                      <Row label="缩放"><input type="range" min={100} max={240} value={avatar.zoom || 120} onChange={(e) => patchSettings({ zoom: parseInt(e.target.value, 10) })} className="w-36 accent-indigo-500" /></Row>
+                      <Row label="水平偏移"><input type="range" min={0} max={100} value={avatar.x == null ? 50 : avatar.x} onChange={(e) => patchSettings({ x: parseInt(e.target.value, 10) })} className="w-36 accent-indigo-500" /></Row>
+                      <Row label="垂直偏移"><input type="range" min={0} max={100} value={avatar.y == null ? 50 : avatar.y} onChange={(e) => patchSettings({ y: parseInt(e.target.value, 10) })} className="w-36 accent-indigo-500" /></Row>
+                    </div>
+                  )}
+                </SettingsCard>
+              </>
+            )}
+
+            {cat === 'notify' && (
+              <SettingsCard title="通知与输入" icon={Bell}>
+                <Row label="通知"><Toggle on={s.notifyEnabled !== false} onClick={() => onPatch({ notifyEnabled: !(s.notifyEnabled !== false) })} /></Row>
+                <Row label="消息预览"><Toggle on={s.notifyPreview !== false} onClick={() => onPatch({ notifyPreview: !(s.notifyPreview !== false) })} /></Row>
+                <Row label="正在输入"><Toggle on={s.showTyping !== false} onClick={() => onPatch({ showTyping: !(s.showTyping !== false) })} /></Row>
+                <Row label="发送键"><select value={s.sendKey || 'enter'} onChange={(e) => onPatch({ sendKey: e.target.value })} className="field rounded px-2 py-1 text-sm"><option value="enter">Enter</option><option value="ctrlEnter">Ctrl+Enter</option></select></Row>
+                <Row label="Markdown 渲染" hint="**bold** *italic* `code`"><Toggle on={!!s.markdown} onClick={() => onPatch({ markdown: !s.markdown })} /></Row>
+                <Row label="最小化到托盘"><Toggle on={s.minimizeToTray !== false} onClick={() => onPatch({ minimizeToTray: !(s.minimizeToTray !== false) })} /></Row>
+                <Row label="关闭主窗口时"><select value={s.closeAction || 'ask'} onChange={(e) => onPatch({ closeAction: e.target.value })} className="field rounded px-2 py-1 text-sm"><option value="ask">询问</option><option value="tray">最小化到托盘</option><option value="quit">退出程序</option></select></Row>
+                <Row label="开机自启" hint="开机时自动启动"><Toggle on={!!s.autoStart} onClick={() => onPatch({ autoStart: !s.autoStart })} /></Row>
+              </SettingsCard>
+            )}
+
+            {cat === 'files' && (
+              <SettingsCard title="文件" icon={FileIcon}>
+                <Row label="接收方式"><select value={s.receiveMode || 'auto'} onChange={(e) => onPatch({ receiveMode: e.target.value })} className="field rounded px-2 py-1 text-sm"><option value="auto">自动</option><option value="manual">手动</option></select></Row>
+                <Row label="下载位置" hint={s.downloadDir || '未设置'}><button onClick={async () => { const d = await api.file.chooseDir(); if (d) onPatch({ downloadDir: d }) }} className="btn-ghost text-sm rounded-lg px-3 py-1.5">选择...</button></Row>
+              </SettingsCard>
+            )}
+
+            {cat === 'network' && (
+              <SettingsCard title="网络" icon={Network}>
+                <Row label="UDP 端口" hint="需要与其他客户端使用同一端口"><input type="number" min={1024} max={65535} value={udpDraft} onChange={(e) => setUdpDraft(e.target.value)} className="field w-24 rounded px-2 py-1 text-sm" /></Row>
+                <div className="py-2">
+                   <div className="text-sm txt">广播地址</div>
+                  <div className="text-[11px] txt-dim">可选，使用逗号或换行分隔</div>
+                  <textarea value={broadcastDraft} onChange={(e) => setBroadcastDraft(e.target.value)} rows={2} className="field mt-2 w-full rounded px-2 py-1 text-sm resize-none" placeholder="例如：192.168.1.255, 255.255.255.255" />
+                </div>
+                <button onClick={applyNetwork} className="btn-primary text-sm rounded-lg px-3 py-1.5 inline-flex items-center gap-1"><RefreshCw size={13} /> 应用网络设置</button>
+              </SettingsCard>
+            )}
+
+            {cat === 'privacy' && (
+              <>
+                <SettingsCard title="隐私" icon={EyeOff}>
+                  <Row label="匿名聊天" hint="消息中显示匿名昵称"><Toggle on={!!s.anonymous} onClick={() => onPatch({ anonymous: !s.anonymous })} /></Row>
+                  <Row label="默认阅后即焚"><Toggle on={!!s.burnDefault} onClick={() => onPatch({ burnDefault: !s.burnDefault })} /></Row>
+                  <Row label="阅后即焚时长" hint="3 到 60 秒"><input type="number" min={3} max={60} value={s.burnTtl || 10} onChange={(e) => onPatch({ burnTtl: Math.min(60, Math.max(3, parseInt(e.target.value, 10) || 10)) })} className="field w-16 rounded px-2 py-1 text-sm" /></Row>
+                   <Row label="自动锁定分钟" hint="0 = 关闭"><input type="number" min={0} max={240} value={s.autoLockMin || 0} onChange={(e) => onPatch({ autoLockMin: Math.max(0, parseInt(e.target.value, 10) || 0) })} className="field w-16 rounded px-2 py-1 text-sm" /></Row>
+                   <Row label="历史保留天数" hint="0 = 永久保留"><input type="number" min={0} max={3650} value={s.retentionDays || 0} onChange={(e) => onPatch({ retentionDays: Math.max(0, parseInt(e.target.value, 10) || 0) })} className="field w-16 rounded px-2 py-1 text-sm" /></Row>
+                </SettingsCard>
+
+                <SettingsCard title="修改密码" icon={Lock}>
+                  <input type="password" value={oldPw} onChange={(e) => setOldPw(e.target.value)} placeholder="旧密码" className={FIELD} />
+                  <input type="password" value={newPw} onChange={(e) => setNewPw(e.target.value)} placeholder="新密码" className={FIELD + ' mt-2'} />
+                  <input type="password" value={newPw2} onChange={(e) => setNewPw2(e.target.value)} placeholder="确认新密码" className={FIELD + ' mt-2'} />
+                  {msg && <div className={'mt-2 text-xs ' + (msg.t === 'ok' ? 'accent-txt' : 'text-red-400')}>{msg.s}</div>}
+                  <button onClick={changePw} className="btn-primary mt-3 text-sm rounded-lg px-3 py-1.5 font-medium">修改</button>
+                </SettingsCard>
+
+                <SettingsCard title="数据管理" icon={Trash2}>
+                   <Row label="清空历史"><button onClick={onClearHistory} className="btn-ghost text-sm rounded-lg px-3 py-1.5 inline-flex items-center gap-1"><Trash2 size={13} /> 清空</button></Row>
+                   <Row label="清空草稿"><button onClick={onClearDrafts} className="btn-ghost text-sm rounded-lg px-3 py-1.5 inline-flex items-center gap-1"><Trash2 size={13} /> 清空</button></Row>
+                   <Row label="锁定" hint="锁定当前应用"><button onClick={async () => { await api.auth.lock(); onLock() }} className="btn-ghost text-sm rounded-lg px-3 py-1.5">锁定</button></Row>
+                </SettingsCard>
+
+                <SettingsCard title="重置身份" icon={Trash2} danger>
+                  {!confirmReset ? (
+                    <button onClick={() => setConfirmReset(true)} className="text-sm text-red-400 border border-red-500/30 rounded-lg px-3 py-1.5 hover:bg-red-500/10">重置身份...</button>
+                  ) : (
+                    <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3">
+                       <div className="text-xs text-red-400">此操作会永久删除身份和本地记录，且无法恢复。</div>
+                       <label className="mt-2 flex items-center gap-2 text-xs txt-dim"><input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} /> 我已了解此操作不可恢复</label>
+                       <div className="mt-2 flex gap-2"><button onClick={async () => { await api.auth.resetIdentity(); onReset() }} disabled={!ack} className="text-xs bg-red-500 text-white rounded px-3 py-1.5 disabled:opacity-40">确认重置</button><button onClick={() => { setConfirmReset(false); setAck(false) }} className="text-xs txt-dim px-3 py-1.5">取消</button></div>
+                    </div>
+                  )}
+                </SettingsCard>
+              </>
+            )}
+
+            {cat === 'about' && (
+              <SettingsCard title="关于" icon={Info}>
+                <div className="rounded-lg p-3 text-xs txt-dim" style={{ background: 'var(--bubble-other)' }}>
+                  <div className="txt font-medium">iLink {appInfo ? appInfo.appVersion : ''}</div>
+                  <div className="mt-1">P2P 局域网点对点通讯，数据默认存放在本地 data 目录。</div>
+                   {appInfo && <div className="mt-1 font-mono">Electron {appInfo.versions.electron} · Node {appInfo.versions.node}</div>}
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                   <button onClick={checkUpdate} className="btn-ghost text-sm rounded-lg px-3 py-1.5 inline-flex items-center gap-1"><RefreshCw size={13} /> 检查更新</button>
+                   <button onClick={() => setUpdateMsg('帮助：两端需要使用相同 UDP 端口，并检查防火墙和广播地址。')} className="btn-ghost text-sm rounded-lg px-3 py-1.5 inline-flex items-center gap-1"><CircleHelp size={13} /> 帮助</button>
+                   <button onClick={() => setUpdateMsg('关于：iLink 使用 UDP 发现、端到端加密消息和本地加密存储。')} className="btn-ghost text-sm rounded-lg px-3 py-1.5 inline-flex items-center gap-1"><Info size={13} /> 关于</button>
+                </div>
+                {updateMsg && <div className="mt-2 text-xs accent-txt">{updateMsg}</div>}
+              </SettingsCard>
+            )}
+          </div>
+        </div>
+      </div>
+    </Overlay>
+  )
+}
+
+// 群成员列表：显示人数，群主第一，其余按在线 > 离线 > 名字排序
+function GroupMemberList ({ room, members, peers, selfId, onMemberClick, onAddMember, onKickMember }) {
+  const [adding, setAdding] = useState(false)
+  const [query, setQuery] = useState('')
+  const onlineCount = members.filter((p) => p.online).length
+  const memberIds = new Set(members.map((p) => p.id))
+  const isMember = !!selfId && memberIds.has(selfId)
+  const canKick = !!selfId && room.ownerId === selfId
+  const needle = query.trim().toLowerCase()
+  const candidates = (peers || [])
+    .filter((p) => p && p.id && !memberIds.has(p.id))
+    .filter((p) => !needle || (p.name || '').toLowerCase().includes(needle) || String(p.id).toLowerCase().includes(needle) || (p.email || '').toLowerCase().includes(needle))
+    .slice(0, 12)
+  const sorted = members.slice().sort((a, b) => {
+    const ao = a.id === room.ownerId ? 0 : 1
+    const bo = b.id === room.ownerId ? 0 : 1
+    if (ao !== bo) return ao - bo
+    const aOn = a.online ? 0 : 1
+    const bOn = b.online ? 0 : 1
+    if (aOn !== bOn) return aOn - bOn
+    return (a.name || '').localeCompare(b.name || '', 'zh-CN')
+  })
+  return (
+    <aside className="w-full sidebar-surface border-l bd-soft flex flex-col overflow-hidden">
+      <div className="pane-header px-3 flex items-center gap-1.5 border-b bd-soft shrink-0 text-xs txt-dim">
+        <Users size={13} />
+        <span>群成员</span>
+        <span className="txt font-semibold">{members.length}</span>
+        <span className="ml-auto accent-txt">{onlineCount} 在线</span>
+      </div>
+      {isMember && (
+        <div className="p-2 border-b bd-soft shrink-0">
+          <button onClick={() => setAdding((v) => !v)} className="btn-ghost w-full rounded-lg px-2 py-1.5 text-xs inline-flex items-center justify-center gap-1.5">
+              <UserPlus size={13} /> 添加成员
+          </button>
+          {adding && (
+            <div className="mt-2 space-y-1">
+              <div className="side-search">
+                <Search size={12} className="txt-dim shrink-0" />
+                <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="用户名/ID/邮箱" />
+              </div>
+              <div className="max-h-44 overflow-auto scroll space-y-0.5">
+                {candidates.map((p) => (
+                  <div key={p.id} className="side-item flex items-center gap-2 px-2 py-1.5 rounded-lg">
+                    <Avatar name={p.name} id={p.id} size={24} dim={!p.online} avatar={p.avatar} />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs txt truncate">{p.name}</div>
+                      <div className="text-[10px] txt-dim truncate">{p.id}</div>
+                    </div>
+                    <button onClick={() => onAddMember && onAddMember([p.id])} className="btn-primary text-[11px] rounded-md px-2 py-1">添加</button>
+                  </div>
+                ))}
+                {query.trim() && candidates.length === 0 && <div className="text-[11px] txt-dim px-2 py-2">未找到匹配的成员</div>}
+                {!query.trim() && candidates.length === 0 && <div className="text-[11px] txt-dim px-2 py-2">暂无可添加成员</div>}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+      <div className="flex-1 overflow-auto scroll p-2 space-y-0.5">
+        {sorted.map((p, i) => {
+          const isOwner = p.id === room.ownerId
+          return (
+            <div key={p.id} style={{ animationDelay: Math.min(i * 30, 240) + 'ms' }} className="row-in side-item w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-left">
+              <button onClick={() => onMemberClick && onMemberClick(p)} className="flex items-center gap-2 flex-1 min-w-0 text-left">
+              <div className="relative shrink-0">
+                <Avatar name={p.name} id={p.id} size={28} dim={!p.online} avatar={p.avatar} />
+                <span className={'absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full ' + (presenceOf(p).key === 'online' ? 'dot-pulse' : '')} style={{ background: presenceOf(p).color, border: '2px solid rgb(var(--panel-rgb))' }} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-[12.5px] txt truncate flex items-center gap-1">
+                  <span className="truncate">{p.self ? '我' : p.name}</span>
+                  {isOwner && <Crown size={11} className="accent-txt shrink-0" />}
+                </div>
+                <div className="text-[10px]" style={{ color: presenceOf(p).color }}>{isOwner ? '群主 · ' : ''}{presenceOf(p).label}</div>
+              </div>
+              </button>
+              {canKick && !isOwner && !p.self && <button onClick={() => onKickMember && onKickMember(p)} className="btn-ghost text-[11px] rounded-md px-2 py-1 shrink-0 text-red-400">移出</button>}
+            </div>
+          )
+        })}
+      </div>
+    </aside>
+  )
+}
+
+function DetailPane ({ active, activePeer, activeRoom, roomMembers, peers, self, searchPane, convos, convTitle, locateMessage, onOpenFile, onCloseSearch, onMemberClick, onAddMember, onKickMember, onOpenProfile }) {
+  if (searchPane) {
+    return <SearchPane key={searchPane} defaultScope={searchPane === 'global' ? 'all' : 'current'} convos={convos} convTitle={convTitle} activeConv={active} onLocate={locateMessage} onOpenFile={onOpenFile} onClose={onCloseSearch} />
+  }
+  if (activeRoom) {
+    return <GroupMemberList room={activeRoom} members={roomMembers} peers={peers} selfId={self && self.id} onMemberClick={onMemberClick} onAddMember={onAddMember} onKickMember={onKickMember} />
+  }
+  return (
+    <aside className="w-full sidebar-surface border-l bd-soft flex flex-col overflow-hidden">
+      <div className="pane-header px-3 flex items-center gap-1.5 border-b bd-soft shrink-0 text-xs txt-dim">
+        <Info size={13} />
+        <span>聊天详情</span>
+      </div>
+      <div className="flex-1 overflow-auto scroll p-4">
+        {activePeer ? (
+          <div className="space-y-4">
+            <div className="flex flex-col items-center text-center gap-2">
+              <Avatar name={activePeer.name} id={activePeer.id} size={64} dim={!activePeer.online} avatar={activePeer.avatar} />
+              <div className="min-w-0">
+                <div className="text-base font-semibold txt truncate">{activePeer.name}</div>
+                <div className="text-xs" style={{ color: presenceOf(activePeer).color }}>{presenceOf(activePeer).label}</div>
+              </div>
+              {activePeer.status && <div className="text-xs txt-dim rounded-lg px-3 py-2 w-full" style={{ background: 'var(--hover)' }}>{activePeer.status}</div>}
+            </div>
+            <div className="space-y-2 text-xs">
+              <div className="flex justify-between gap-2"><span className="txt-dim">ID</span><span className="txt truncate font-mono">{activePeer.id}</span></div>
+              {activePeer.address && <div className="flex justify-between gap-2"><span className="txt-dim">IP</span><span className="txt truncate font-mono">{activePeer.address}</span></div>}
+            </div>
+            <button onClick={() => onOpenProfile && onOpenProfile(activePeer)} className="btn-ghost w-full rounded-lg px-3 py-2 text-sm">Profile</button>
+          </div>
+        ) : (
+          <div className="h-full flex flex-col items-center justify-center text-center gap-2 txt-dim">
+            <User size={30} />
+            <div className="text-xs">未找到匹配的成员</div>
+          </div>
+        )}
+      </div>
+    </aside>
+  )
+}
+
+// 聊天搜索侧栏：可搜索聊天记录与文件，点击定位到聊天框相应位置
+function SearchPane ({ convos, convTitle, activeConv, onLocate, onOpenFile, onClose, defaultScope }) {
+  const [q, setQ] = useState('')
+  const [tab, setTab] = useState('all')
+  const [scope, setScope] = useState(defaultScope || 'current')
+  const needle = q.trim().toLowerCase()
+  const results = []
+
+  if (needle || tab === 'file') {
+    const convIds = scope === 'current' && activeConv ? [activeConv] : Object.keys(convos)
+    for (const conv of convIds) {
+      const list = convos[conv] || []
+      for (const m of list) {
+        if (m.recalled || m.system || m.burn) continue
+        const isFile = m.type === 'file' || m.type === 'file-offer'
+        if (tab === 'msg' && isFile) continue
+        if (tab === 'file' && !isFile) continue
+        const body = isFile ? (m.fname || '') : (m.text || '')
+        const sender = m.self ? '我' : (m.name || '')
+        const hay = (body + ' ' + sender + ' ' + convTitle(conv)).toLowerCase()
+        if (!needle || hay.includes(needle)) results.push({ conv, m, isFile, body, sender })
+      }
+    }
+    results.sort((a, b) => (b.m.ts || 0) - (a.m.ts || 0))
+  }
+
+  const hl = (value) => {
+    const text = value == null ? '' : String(value)
+    if (!needle) return text
+    let s = text
+    let i = s.toLowerCase().indexOf(needle)
+    if (i < 0) return s
+    if (i > 24 && s.length > 64) {
+      s = '...' + s.slice(i - 18)
+      i = s.toLowerCase().indexOf(needle)
+    }
+    return (
+      <>
+        {s.slice(0, i)}
+        <span className="rounded px-0.5 font-bold" style={{ background: 'var(--accent-tint)', color: 'var(--accent)' }}>
+          {s.slice(i, i + needle.length)}
+        </span>
+        {s.slice(i + needle.length)}
+      </>
+    )
+  }
+
+  const showing = !!needle || tab === 'file'
+
+  return (
+    <aside className="w-full sidebar-surface border-l bd-soft flex flex-col overflow-hidden">
+      <div className="pane-header px-3 flex items-center gap-2 border-b bd-soft shrink-0">
+        <div className="field flex-1 min-w-0 rounded-full px-3 py-1.5 flex items-center gap-2">
+          <Search size={13} className="txt-dim shrink-0" />
+          <input
+            autoFocus
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder={scope === 'all' ? '全局搜索消息、文件和用户名' : '搜索当前会话中的消息、文件和用户名'}
+            className="flex-1 min-w-0 bg-transparent outline-none text-xs txt"
+            style={{ border: 'none', boxShadow: 'none' }}
+          />
+          {q && <button onClick={() => setQ('')} className="txt-dim hover:opacity-70 shrink-0"><X size={12} /></button>}
+        </div>
+        <button onClick={onClose} className="icon-btn shrink-0"><X size={15} /></button>
+      </div>
+
+      <div className="px-3 pt-2 pb-2 flex items-center gap-2 shrink-0 border-b bd-soft">
+        <div className="seg-tabs grid grid-cols-3 gap-1 flex-1 text-xs">
+          <button onClick={() => setTab('all')} className={tab === 'all' ? 'seg-tab seg-tab-active' : 'seg-tab'}>全部</button>
+          <button onClick={() => setTab('msg')} className={tab === 'msg' ? 'seg-tab seg-tab-active' : 'seg-tab'}>消息</button>
+          <button onClick={() => setTab('file')} className={tab === 'file' ? 'seg-tab seg-tab-active' : 'seg-tab'}>文件</button>
+        </div>
+        <button
+          onClick={() => setScope((v) => (v === 'current' ? 'all' : 'current'))}
+          title="切换搜索范围"
+          className={'text-[11px] rounded-lg px-2.5 py-1.5 shrink-0 font-medium transition ' + (scope === 'all' ? 'btn-primary' : 'btn-ghost')}
+        >
+          {scope === 'current' ? '当前会话' : '全部会话'}
+        </button>
+      </div>
+
+      <div className="px-4 pt-2 text-[10.5px] accent-txt shrink-0">右键可定位到聊天记录中的结果</div>
+      {showing && results.length > 0 && <div className="px-4 pt-1 text-[10.5px] txt-dim shrink-0">共 {results.length} 条结果</div>}
+
+      <div className="flex-1 overflow-auto scroll px-3 py-2 space-y-1.5">
+        {!showing && (
+          <div className="flex flex-col items-center gap-2 px-4 py-10 select-none">
+            <div className="text-3xl float-soft">搜索</div>
+            <div className="text-xs txt-dim">输入关键字，搜索消息、文件或用户名</div>
+          </div>
+        )}
+
+        {showing && results.length === 0 && (
+          <div className="flex flex-col items-center gap-2 px-4 py-10 select-none">
+            <div className="text-3xl">空</div>
+            <div className="text-xs txt-dim">没有匹配的结果，换一个关键词试试</div>
+          </div>
+        )}
+
+        {results.slice(0, 200).map((r, i) => (
+          <button
+            key={r.m.mid || i}
+            onClick={() => { if (r.isFile && r.m.path) onOpenFile(r.m.path); else onLocate(r.conv, r.m.mid) }}
+            onContextMenu={(e) => { e.preventDefault(); onLocate(r.conv, r.m.mid) }}
+            style={{ animationDelay: Math.min(i * 25, 250) + 'ms' }}
+            className="search-card row-in w-full text-left px-2.5 py-2 rounded-xl"
+          >
+            <div className="flex items-center gap-1.5 text-[10px] min-w-0">
+              <span className="px-1.5 py-0.5 rounded-md accent-txt font-semibold shrink-0 max-w-[45%] truncate" style={{ background: 'var(--accent-tint)' }}>
+                {convTitle(r.conv)}
+              </span>
+              {r.sender && <span className="txt-dim truncate">{hl(r.sender)}</span>}
+              <span className="ml-auto txt-dim shrink-0">{dayLabel(r.m.ts)} {fmtTime(r.m.ts).slice(0, 5)}</span>
+            </div>
+
+            {r.isFile ? (
+              <div className="mt-1.5 flex items-center gap-2 min-w-0">
+                <span className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0" style={{ background: 'var(--accent-tint)' }}>
+                  <FileIcon size={14} className="accent-txt" />
+                </span>
+                <span className="flex-1 min-w-0">
+                  <span className="block text-[12.5px] txt font-medium truncate">{hl(r.m.fname || '')}</span>
+                  <span className="block text-[10px] txt-dim">{fmtSize(r.m.size)}</span>
+                </span>
+              </div>
+            ) : (
+              <div className="mt-1 text-[12.5px] txt leading-relaxed truncate">{hl(r.body)}</div>
+            )}
+          </button>
+        ))}
+      </div>
+    </aside>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// 历史记录面板：按日期分组浏览当前会话全部消息
+function HistoryPanel ({ title, messages, selfName, selfAvatar, onLocate, onOpenFile, onClose }) {
+  const [q, setQ] = useState('')
+  const [tab, setTab] = useState('all')
+  const [limit, setLimit] = useState(100)
+  const needle = q.trim().toLowerCase()
+  const filtered = []
+
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]
+    if (m.system || m.recalled || m.burn) continue
+    const isFile = m.type === 'file' || m.type === 'file-offer'
+    const isImg = isFile && m.mime && m.mime.indexOf('image/') === 0
+    if (tab === 'img' && !isImg) continue
+    if (tab === 'file' && (!isFile || isImg)) continue
+    if (needle) {
+      const sender = m.self ? (selfName || '我') : (m.name || '')
+      const hay = ((isFile ? (m.fname || '') : (m.text || '')) + ' ' + sender).toLowerCase()
+      if (!hay.includes(needle)) continue
+    }
+    filtered.push(m)
+  }
+
+  const shown = filtered.slice(0, limit)
+  let lastDayLabel = null
+
+  return (
+    <Overlay onClose={onClose}>
+      <div className="w-[620px] max-w-[92vw] glass-panel rounded-2xl overflow-hidden flex flex-col" style={{ height: '80vh', maxHeight: 680 }}>
+        <div className="flex items-center gap-2 px-5 border-b bd-soft shrink-0" style={{ height: 54 }}>
+          <History size={16} className="accent-txt shrink-0" />
+          <span className="text-sm font-semibold txt truncate">历史记录</span>
+          <span className="text-xs txt-dim truncate">· {title}</span>
+          <button onClick={onClose} className="icon-btn ml-auto shrink-0"><X size={16} /></button>
+        </div>
+
+        <div className="px-4 py-2.5 flex items-center gap-2 border-b bd-soft shrink-0">
+          <div className="field flex-1 min-w-0 rounded-full px-3 py-1.5 flex items-center gap-2">
+            <Search size={13} className="txt-dim shrink-0" />
+            <input
+              autoFocus
+              value={q}
+              onChange={(e) => { setQ(e.target.value); setLimit(100) }}
+              placeholder="搜索历史记录"
+              className="flex-1 min-w-0 bg-transparent outline-none text-xs txt"
+              style={{ border: 'none', boxShadow: 'none' }}
+            />
+            {q && <button onClick={() => setQ('')} className="txt-dim hover:opacity-70 shrink-0"><X size={12} /></button>}
+          </div>
+          <div className="seg-tabs grid grid-cols-3 gap-1 text-xs shrink-0" style={{ width: 180 }}>
+            <button onClick={() => { setTab('all'); setLimit(100) }} className={tab === 'all' ? 'seg-tab seg-tab-active' : 'seg-tab'}>全部</button>
+            <button onClick={() => { setTab('img'); setLimit(100) }} className={tab === 'img' ? 'seg-tab seg-tab-active' : 'seg-tab'}>图片</button>
+            <button onClick={() => { setTab('file'); setLimit(100) }} className={tab === 'file' ? 'seg-tab seg-tab-active' : 'seg-tab'}>文件</button>
+          </div>
+        </div>
+
+        <div className="px-5 pt-2 text-[10.5px] txt-dim shrink-0">共 {filtered.length} 条记录，点击可定位到聊天记录。</div>
+
+        <div className="flex-1 overflow-auto scroll px-3 py-2">
+          {shown.length === 0 && (
+            <div className="flex flex-col items-center gap-2 px-4 py-12 select-none">
+              <div className="text-3xl float-soft">空</div>
+              <div className="text-xs txt-dim">{needle ? '没有匹配的记录' : '暂无聊天记录'}</div>
+            </div>
+          )}
+
+          {shown.map((m) => {
+            const day = dayLabel(m.ts)
+            const showDay = day !== lastDayLabel
+            lastDayLabel = day
+            const isFile = m.type === 'file' || m.type === 'file-offer'
+            const isImg = isFile && m.mime && m.mime.indexOf('image/') === 0
+            const sender = m.self ? (selfName || '我') : (m.name || '用户')
+
+            return (
+              <div key={m.mid}>
+                {showDay && <div className="px-2 pt-3 pb-1 text-[11px] font-semibold accent-txt">{day}</div>}
+                <button onClick={() => onLocate(m.mid)} className="history-row w-full flex items-start gap-2.5 px-2.5 py-2 rounded-xl text-left">
+                  <Avatar name={sender} id={m.from || ''} avatar={m.self ? selfAvatar : m.avatar} size={28} />
+                  <span className="flex-1 min-w-0">
+                    <span className="flex items-center gap-2">
+                      <span className="text-xs txt font-medium truncate">{sender}</span>
+                      <span className="ml-auto text-[10px] txt-dim shrink-0">{fmtTime(m.ts).slice(0, 5)}</span>
+                    </span>
+
+                    {isImg && m.dataUrl ? (
+                      <img src={m.dataUrl} alt={m.fname} className="mt-1 w-14 h-14 object-cover rounded-lg" style={{ border: '1px solid var(--border-soft)' }} />
+                    ) : isFile ? (
+                      <span className="mt-1 inline-flex items-center gap-2 rounded-lg px-2 py-1.5" style={{ background: 'var(--hover)', border: '1px solid var(--border-soft)' }}>
+                        <span className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ background: 'var(--accent-tint)' }}>
+                          <FileIcon size={12} className="accent-txt" />
+                        </span>
+                        <span className="min-w-0">
+                          <span className="block text-[11.5px] txt truncate max-w-[260px]">{m.fname}</span>
+                          <span className="block text-[9.5px] txt-dim">{fmtSize(m.size)}</span>
+                        </span>
+                        {m.path && <span onClick={(e) => { e.stopPropagation(); onOpenFile(m.path) }} className="text-[10px] accent-txt hover:underline shrink-0 cursor-pointer">打开</span>}
+                      </span>
+                    ) : (
+                      <span className="block mt-0.5 text-[12.5px] txt-dim leading-relaxed" style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{m.text}</span>
+                    )}
+                  </span>
+                </button>
+              </div>
+            )
+          })}
+
+          {filtered.length > limit && (
+            <div className="flex justify-center py-2">
+              <button onClick={() => setLimit((l) => l + 200)} className="btn-ghost text-xs rounded-lg px-4 py-1.5">
+                加载更多（还有 {filtered.length - limit} 条）
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </Overlay>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// 截图编辑：选择区域、标注、复制 / 保存 / 发送，Esc 取消
+const SHOT_COLORS = ['#ff3b30', '#ff9500', '#ffd60a', '#34c759', '#0a84ff', '#ffffff', '#111111']
+function ShotScreen () {
+  const [img, setImg] = useState('')
+  const [rect, setRect] = useState(null)
+  const [dragging, setDragging] = useState(false)
+  const [mode, setMode] = useState('select')
+  const [annos, setAnnos] = useState([])
+  const [draftRect, setDraftRect] = useState(null)
+  const [textEdit, setTextEdit] = useState(null)
+  const [color, setColor] = useState('#ff3b30')
+  const [lineW, setLineW] = useState(3)
+  const [fontSize, setFontSize] = useState(18)
+  const startRef = useRef(null)
+  const textEditRef = useRef(null)
+  textEditRef.current = textEdit
+
+  useEffect(() => {
+    if (api && api.shot && api.shot.getImage) api.shot.getImage().then((d) => setImg(d || ''))
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return
+      if (textEditRef.current) {
+        setTextEdit(null)
+        return
+      }
+      api.shot.cancel()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  function commitTextEdit (te) {
+    const t = te || textEditRef.current
+    if (t && t.value.trim()) setAnnos((prev) => [...prev, { type: 'text', x: t.x, y: t.y, text: t.value.trim(), color, size: fontSize }])
+    setTextEdit(null)
+  }
+
+  function onDown (e) {
+    if (e.button !== 0) return
+    if (mode === 'text') {
+      if (textEdit) commitTextEdit()
+      setTextEdit({ x: e.clientX, y: e.clientY, value: '' })
+      return
+    }
+    startRef.current = { x: e.clientX, y: e.clientY }
+    if (mode === 'select') setRect({ x: e.clientX, y: e.clientY, w: 0, h: 0 })
+    else setDraftRect({ x: e.clientX, y: e.clientY, w: 0, h: 0 })
+    setDragging(true)
+  }
+
+  function onMove (e) {
+    if (!dragging || !startRef.current) return
+    const s = startRef.current
+    const r = { x: Math.min(s.x, e.clientX), y: Math.min(s.y, e.clientY), w: Math.abs(e.clientX - s.x), h: Math.abs(e.clientY - s.y) }
+    if (mode === 'select') setRect(r)
+    else setDraftRect(r)
+  }
+
+  function onUp () {
+    if (mode === 'rect' && draftRect && draftRect.w > 3 && draftRect.h > 3) {
+      setAnnos((prev) => [...prev, { type: 'rect', ...draftRect, color, width: lineW }])
+    }
+    setDraftRect(null)
+    setDragging(false)
+  }
+
+  function cropAndExport () {
+    return new Promise((resolve) => {
+      if (!rect || rect.w < 3 || rect.h < 3) return resolve(null)
+      const image = new Image()
+      image.onload = () => {
+        try {
+          const sx = image.naturalWidth / window.innerWidth
+          const sy = image.naturalHeight / window.innerHeight
+          const c = document.createElement('canvas')
+          c.width = Math.max(1, Math.round(rect.w * sx))
+          c.height = Math.max(1, Math.round(rect.h * sy))
+          const ctx = c.getContext('2d')
+          ctx.drawImage(image, rect.x * sx, rect.y * sy, rect.w * sx, rect.h * sy, 0, 0, c.width, c.height)
+          for (const a of annos) {
+            if (a.type === 'rect') {
+              ctx.strokeStyle = a.color
+              ctx.lineWidth = Math.max(1, a.width * sx)
+              ctx.strokeRect((a.x - rect.x) * sx, (a.y - rect.y) * sy, a.w * sx, a.h * sy)
+            } else if (a.type === 'text') {
+              ctx.fillStyle = a.color
+              ctx.font = '600 ' + Math.round(a.size * sx) + 'px "Microsoft YaHei", sans-serif'
+              ctx.textBaseline = 'top'
+              ctx.fillText(a.text, (a.x - rect.x) * sx, (a.y - rect.y) * sy)
+            }
+          }
+          resolve(c.toDataURL('image/png'))
+        } catch (_) {
+          resolve(null)
+        }
+      }
+      image.onerror = () => resolve(null)
+      image.src = img
+    })
+  }
+
+  async function act (kind) {
+    if (textEdit) commitTextEdit()
+    const dataUrl = await cropAndExport()
+    if (!dataUrl) { api.shot.cancel(); return }
+    if (kind === 'copy') api.shot.copy(dataUrl)
+    else if (kind === 'save') api.shot.save(dataUrl)
+    else api.shot.done(dataUrl)
+  }
+
+  const showToolbar = rect && !dragging && rect.w > 3 && rect.h > 3
+  const toolbarStyle = showToolbar ? {
+    left: Math.max(8, Math.min(rect.x, window.innerWidth - 420)),
+    top: rect.y + rect.h + 8 > window.innerHeight - 86 ? Math.max(8, rect.y - 86) : rect.y + rect.h + 8,
+  } : null
+  const toolBtn = (active) => ({ fontSize: 12, padding: '4px 10px', borderRadius: 7, border: 'none', cursor: 'pointer', color: active ? '#fff' : '#ccc', background: active ? '#4f8cff' : 'rgba(255,255,255,0.1)' })
+  const sizeOpts = mode === 'text'
+    ? [{ v: 14, l: '小' }, { v: 18, l: '中' }, { v: 26, l: '大' }]
+    : [{ v: 2, l: '细' }, { v: 3, l: '中' }, { v: 6, l: '粗' }]
+  const sizeVal = mode === 'text' ? fontSize : lineW
+  const setSizeVal = (v) => (mode === 'text' ? setFontSize(v) : setLineW(v))
+
+  return (
+    <div onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} style={{ position: 'fixed', inset: 0, cursor: mode === 'text' ? 'text' : 'crosshair', userSelect: 'none', background: '#000', overflow: 'hidden' }}>
+      {img && <img src={img} alt="" draggable={false} style={{ position: 'absolute', inset: 0, width: '100vw', height: '100vh' }} />}
+      {!rect && <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.35)' }} />}
+      {!rect && (
+        <div style={{ position: 'absolute', top: 24, left: '50%', transform: 'translateX(-50%)', background: 'rgba(0,0,0,0.7)', color: '#fff', fontSize: 13, padding: '8px 16px', borderRadius: 999 }}>
+          拖拽框选截图区域，Esc 取消
+        </div>
+      )}
+      {rect && (
+        <div style={{ position: 'absolute', left: rect.x, top: rect.y, width: rect.w, height: rect.h, border: '1.5px solid #4f8cff', boxShadow: '0 0 0 100000px rgba(0,0,0,0.45)', pointerEvents: 'none' }}>
+          <span style={{ position: 'absolute', top: -24, left: 0, fontSize: 11, color: '#fff', background: 'rgba(0,0,0,0.6)', padding: '2px 6px', borderRadius: 6 }}>
+            {Math.round(rect.w)} × {Math.round(rect.h)}
+          </span>
+        </div>
+      )}
+      {annos.map((a, i) => a.type === 'rect'
+        ? <div key={i} style={{ position: 'absolute', left: a.x, top: a.y, width: a.w, height: a.h, border: a.width + 'px solid ' + a.color, borderRadius: 2, pointerEvents: 'none' }} />
+        : <div key={i} style={{ position: 'absolute', left: a.x, top: a.y, color: a.color, fontSize: a.size, fontWeight: 600, fontFamily: '"Microsoft YaHei", sans-serif', textShadow: '0 0 3px rgba(0,0,0,0.45)', pointerEvents: 'none', whiteSpace: 'pre' }}>{a.text}</div>)}
+      {draftRect && <div style={{ position: 'absolute', left: draftRect.x, top: draftRect.y, width: draftRect.w, height: draftRect.h, border: lineW + 'px dashed ' + color, borderRadius: 2, pointerEvents: 'none' }} />}
+      {textEdit && (
+        <input
+          autoFocus
+          value={textEdit.value}
+          onChange={(e) => setTextEdit((t) => ({ ...t, value: e.target.value }))}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitTextEdit() } }}
+          onMouseDown={(e) => e.stopPropagation()}
+          placeholder="输入文字，回车确认"
+          style={{ position: 'absolute', left: textEdit.x, top: textEdit.y, minWidth: 160, color, fontSize, fontWeight: 600, fontFamily: '"Microsoft YaHei", sans-serif', background: 'rgba(0,0,0,0.35)', border: '1px dashed ' + color, borderRadius: 4, outline: 'none', padding: '2px 6px' }}
+        />
+      )}
+      {showToolbar && (
+        <div onMouseDown={(e) => e.stopPropagation()} style={{ position: 'absolute', ...toolbarStyle, display: 'flex', flexDirection: 'column', gap: 6, background: 'rgba(28,28,32,0.95)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: 10, padding: 7 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <button onClick={() => { if (textEdit) commitTextEdit(); setMode('select') }} style={toolBtn(mode === 'select')} title="重新选择区域">选择</button>
+            <button onClick={() => { if (textEdit) commitTextEdit(); setMode('rect') }} style={toolBtn(mode === 'rect')} title="绘制矩形标注">矩形</button>
+            <button onClick={() => setMode('text')} style={toolBtn(mode === 'text')} title="输入文字标注">文本</button>
+            <span style={{ width: 1, height: 18, background: 'rgba(255,255,255,0.2)' }} />
+            {SHOT_COLORS.map((c) => (
+              <button key={c} onClick={() => setColor(c)} title={c} style={{ width: 16, height: 16, borderRadius: '50%', background: c, cursor: 'pointer', border: color === c ? '2px solid #4f8cff' : '1.5px solid rgba(255,255,255,0.4)', padding: 0 }} />
+            ))}
+            {(mode === 'rect' || mode === 'text') && <span style={{ width: 1, height: 18, background: 'rgba(255,255,255,0.2)' }} />}
+            {(mode === 'rect' || mode === 'text') && sizeOpts.map((o) => (
+              <button key={o.v} onClick={() => setSizeVal(o.v)} style={toolBtn(sizeVal === o.v)}>{o.l}</button>
+            ))}
+            {annos.length > 0 && <button onClick={() => setAnnos((p) => p.slice(0, -1))} style={toolBtn(false)} title="撤销上一项">撤销</button>}
+          </div>
+          <div style={{ display: 'flex', gap: 6 }}>
+            {[{ k: 'copy', label: '复制' }, { k: 'save', label: '保存' }, { k: 'cancel', label: '取消' }, { k: 'send', label: '发送' }].map((b) => (
+              <button
+                key={b.k}
+                onClick={() => (b.k === 'cancel' ? api.shot.cancel() : act(b.k))}
+                style={{ flex: 1, fontSize: 12, padding: '5px 12px', borderRadius: 7, border: 'none', cursor: 'pointer', color: b.k === 'send' ? '#fff' : '#ddd', background: b.k === 'send' ? '#4f8cff' : 'rgba(255,255,255,0.1)' }}
+              >
+                {b.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
+  const standalone = !!standaloneConv
+  const [self, setSelf] = useState(null)
+  const [peers, setPeers] = useState([])
+  const [active, setActive] = useState(standaloneConv === 'group' ? '' : (standaloneConv || ''))
+  const [convos, setConvos] = useState({})
+  const [unread, setUnread] = useState({})
+  const [nameById, setNameById] = useState({})
+  const [text, setText] = useState('')
+  const [netError, setNetError] = useState(null)
+  const [showSettings, setShowSettings] = useState(false)
+  const [showProfile, setShowProfile] = useState(false)
+  const [profilePeer, setProfilePeer] = useState(null)
+  const [searchPane, setSearchPane] = useState(false)
+  const [flashMid, setFlashMid] = useState(null)
+  const [presenceOpen, setPresenceOpen] = useState(false)
+  const [sigDraft, setSigDraft] = useState('')
+  const [ctxMenu, setCtxMenu] = useState(null) // { x, y, m } 消息鍙抽敭鑿滃崟
+  const [sideMenu, setSideMenu] = useState(null) // { x, y, item } 好友列表右键菜单
+  const [emojiOpen, setEmojiOpen] = useState(false)
+  const [fontOpen, setFontOpen] = useState(false)
+  const [fontDraft, setFontDraft] = useState(13.5)
+  const [paneWidth, setPaneWidth] = useState(0)
+  const [visibleCount, setVisibleCount] = useState(MSG_PAGE)
+  const visibleCountRef = useRef(MSG_PAGE); visibleCountRef.current = visibleCount
+  const loadingOlderRef = useRef(false)
+  const prevScrollGapRef = useRef(0)
+  const fontPanelRef = useRef(null)
+  const fontBtnRef = useRef(null)
+  useEffect(() => {
+    if (!fontOpen) return undefined
+    const onDown = (e) => {
+      if (fontPanelRef.current && fontPanelRef.current.contains(e.target)) return
+      if (fontBtnRef.current && fontBtnRef.current.contains(e.target)) return
+      setFontOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [fontOpen])
+  const [typingPeers, setTypingPeers] = useState({})
+  const [settings, setSettings] = useState({})
+  const [burnOn, setBurnOn] = useState(false)
+  const [burnTtl, setBurnTtl] = useState(10)
+  const [now, setNow] = useState(Date.now())
+  const [toasts, setToasts] = useState([])
+  const [fileProgress, setFileProgress] = useState({})
+  const [replyTo, setReplyTo] = useState(null)
+  const [selectMode, setSelectMode] = useState(false)
+  const [selected, setSelected] = useState({})
+  const [forwardOpen, setForwardOpen] = useState(false)
+  const [forwardMode, setForwardMode] = useState('each') // each 逐条转发 / merge 合并转发
+  const [nudgeHover, setNudgeHover] = useState(false) // 戳一戳悬浮自定义文字面板
+  const [nudgeDraft, setNudgeDraft] = useState('')
+  const [pendingAtts, setPendingAtts] = useState([]) // 发送框待发附件 [{ path, name, size, preview }]
+  const [shotOpen, setShotOpen] = useState(false) // 截图选项面板
+  const [historyOpen, setHistoryOpen] = useState(false) // 聊天历史记录面板
+  const shotPanelRef = useRef(null)
+  const shotBtnRef = useRef(null)
+  useEffect(() => {
+    if (!shotOpen) return undefined
+    const onDown = (e) => {
+      if (shotPanelRef.current && shotPanelRef.current.contains(e.target)) return
+      if (shotBtnRef.current && shotBtnRef.current.contains(e.target)) return
+      setShotOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [shotOpen])
+  const [drafts, setDrafts] = useState({})
+  const [shake, setShake] = useState(false)
+  const [chatNotice, setChatNotice] = useState(null)
+  const [confirmAction, setConfirmAction] = useState(null)
+  const [groups, setGroups] = useState([])
+  const [showCreateGroup, setShowCreateGroup] = useState(false)
+  const [groupName, setGroupName] = useState('')
+  const [groupMembers, setGroupMembers] = useState({})
+  const [groupManage, setGroupManage] = useState(null)
+  const [sideTab, setSideTab] = useState('all')
+  const [sideQuery, setSideQuery] = useState('') // 会话列表搜索，仅前端过滤展示
+  const [atBottom, setAtBottom] = useState(true)
+  const [newBelow, setNewBelow] = useState(0)
+  const [dragOver, setDragOver] = useState(false)
+  const atBottomRef = useRef(true)
+
+  const scrollRef = useRef(null)
+  const composerRef = useRef(null)
+  const activeRef = useRef(active); activeRef.current = active
+  const settingsRef = useRef(settings); settingsRef.current = settings
+  const mutedRef = useRef([]); mutedRef.current = settings.muted || []
+  const nameByIdRef = useRef({}); nameByIdRef.current = nameById
+  const convosRef = useRef({}); convosRef.current = convos
+  const lastActivityRef = useRef(Date.now())
+  const lastTypingRef = useRef(0)
+  const toastSeq = useRef(0)
+  const noticeTimerRef = useRef(null)
+
+  // 聊天框内的轻量提示，如文件发送错误，5 秒后自动消失
+  function showChatNotice (msg) {
+    setChatNotice(msg)
+    if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current)
+    noticeTimerRef.current = setTimeout(() => setChatNotice(null), 5000)
+  }
+
+  useEffect(() => {
+    if (!api || !api.p2p) { setNetError('preload 未注入'); return }
+    api.p2p.getSelf().then((s) => { if (s) setSelf(s) })
+    api.p2p.getPeers().then((list) => setPeers(list || []))
+    api.store.getHistory().then((h) => setConvos(h || {}))
+    if (api.store.getGroups) api.store.getGroups().then((list) => setGroups(list || []))
+    api.settings.get().then((s) => { if (s) { setSettings(s); setBurnOn(!!s.burnDefault); setBurnTtl(s.burnTtl || 10); setDisplay({ theme: s.theme, fontPx: s.fontPx, uiStyle: s.uiStyle, chatFont: s.chatFont, chatFontPx: s.chatFontPx }) } })
+    if (api.store.getDrafts) api.store.getDrafts().then((d) => { const saved = d || {}; setDrafts(saved); if (saved[activeRef.current]) setText(saved[activeRef.current]) })
+    const unsubs = [
+      api.p2p.onReady((s) => setSelf(s)),
+      api.p2p.onPeers((list) => { setPeers(list || []); if ((list || []).some((p) => p.online)) setNetError(null) }),
+      api.p2p.onMessage((m) => handleIncoming(m)),
+      api.p2p.onTyping((t) => setTypingPeers((prev) => {
+        const conv = t.room || t.from // 群聊按群 id 归类，私聊按对方 id
+        return { ...prev, [conv]: { ...(prev[conv] || {}), [t.from]: Date.now() + 3500 } }
+      })),
+      api.p2p.onNetError((e) => setNetError(e)),
+      api.file.onProgress((p) => setFileProgress((prev) => ({ ...prev, [p.mid]: p }))),
+      api.file.onReceived(({ conv, msg }) => { pushMsg(conv, msg); setFileProgress((prev) => { const n = { ...prev }; delete n[msg.mid]; return n }); if (conv !== activeRef.current) setUnread((u) => ({ ...u, [conv]: (u[conv] || 0) + 1 })) }),
+      api.file.onOffer((info) => { if (info.scope === 'group') return; const conv = info.scope === 'room' ? info.to : info.from; pushMsg(conv, { ...info, type: 'file-offer', self: false, ts: Date.now() }); if (conv !== activeRef.current) setUnread((u) => ({ ...u, [conv]: (u[conv] || 0) + 1 })) }),
+      api.file.onSent(({ mid }) => setFileProgress((prev) => { const n = { ...prev }; delete n[mid]; return n })),
+      api.file.onFailed(({ mid }) => { setFileProgress((prev) => { const n = { ...prev }; delete n[mid]; return n }); showChatNotice('文件传输失败（对方不可达或已拒绝）') }),
+      api.msg.onRecall(({ conv, mid }) => {
+        // 对方撤回：除原位提示外，非当前会话或失焦时弹通知告知
+        const target = (convosRef.current[conv] || []).find((x) => x.mid === mid)
+        if (target && !target.recalled && !(mutedRef.current || []).includes(conv)) {
+          const who = target.name || nameByIdRef.current[target.from] || '对方'
+          if (conv !== activeRef.current || !document.hasFocus()) addToast({ title: who, text: '撤回了一条消息', conv })
+        }
+        setConvos((prev) => ({ ...prev, [conv]: (prev[conv] || []).map((x) => x.mid === mid ? { ...x, recalled: true, text: '' } : x) }))
+      }),
+      api.msg.onReaction(({ conv, mid, emoji, from }) => applyReaction(conv, mid, emoji, from)),
+      api.msg.onNudge(({ from, text }) => {
+        if ((mutedRef.current || []).includes(from)) return
+        setShake(true); setTimeout(() => setShake(false), 500)
+        const who = nameByIdRef.current[from] || '有人'
+        const body = (text && text.trim()) ? text : '戳了你一下 👋'
+        pushMsg(from, { mid: 'nudge-' + Date.now() + '-' + String(from).slice(0, 4), system: true, text: who + ' ' + body, ts: Date.now() })
+        addToast({ title: who, text: body, conv: from })
+      }),
+    ]
+    if (api.store.onGroups) unsubs.push(api.store.onGroups((list) => setGroups(list || [])))
+    if (api.shot && api.shot.onResult) unsubs.push(api.shot.onResult((info) => {
+      if (!info || !info.path) return
+      setPendingAtts((prev) => [...prev, { path: info.path, name: info.name || '截图.png', size: info.size || 0, preview: info.dataUrl || '' }])
+      focusComposer()
+    }))
+    return () => unsubs.forEach((u) => u && u())
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      const t = Date.now(); setNow(t)
+      setConvos((prev) => {
+        let changed = false; const next = {}
+        for (const k of Object.keys(prev)) { const arr = prev[k].filter((m) => !(m.burn && t >= m.ts + (m.ttl || 10) * 1000)); if (arr.length !== prev[k].length) changed = true; next[k] = arr }
+        return changed ? next : prev
+      })
+    }, 500)
+    return () => clearInterval(id)
+  }, [])
+
+  useEffect(() => {
+    const bump = () => { lastActivityRef.current = Date.now() }
+    window.addEventListener('mousemove', bump); window.addEventListener('keydown', bump); window.addEventListener('mousedown', bump)
+    const id = setInterval(() => { const mins = settings.autoLockMin || 0; if (mins > 0 && Date.now() - lastActivityRef.current > mins * 60000) api.auth.lock().then(() => onLock()) }, 5000)
+    return () => { clearInterval(id); window.removeEventListener('mousemove', bump); window.removeEventListener('keydown', bump); window.removeEventListener('mousedown', bump) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings.autoLockMin])
+
+  // 快捷键：Ctrl+F 搜索，Esc 关闭浮层
+  useEffect(() => {
+    const onKey = (e) => {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F')) { e.preventDefault(); setSearchPane('global') }
+      else if (e.key === 'Escape') { setSearchPane(false); setShowSettings(false); setShowProfile(false); setProfilePeer(null); setEmojiOpen(false); setFontOpen(false); setShotOpen(false); setHistoryOpen(false); setPresenceOpen(false); setCtxMenu(null); setSideMenu(null); setReplyTo(null); setSelectMode(false); setSelected({}) }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  useEffect(() => {
+    const total = Object.values(unread).reduce((a, b) => a + (b || 0), 0)
+    if (api && api.ui) api.ui.setUnread(total)
+  }, [unread])
+
+  useEffect(() => { setNameById((prev) => { const n = { ...prev }; for (const p of peers) n[p.id] = p.name; return n }) }, [peers])
+  useEffect(() => {
+    if (active) return
+    const first = (groups[0] && groups[0].id) || (peers.find((p) => p.online) || {}).id
+    if (first) { setActive(first); setUnread((u) => ({ ...u, [first]: 0 })) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [peers, groups])
+  // 仅在末尾出现新消息或切换会话时滚到底部，表情回应/撤回等就地更新不滚动
+  const lastBottomKeyRef = useRef('')
+  useEffect(() => {
+    if (loadingOlderRef.current) return
+    const list = convos[active] || []
+    const last = list[list.length - 1]
+    const key = active + ':' + (last ? (last.mid || last.ts) : 'empty')
+    if (key === lastBottomKeyRef.current) return
+    const convChanged = !lastBottomKeyRef.current.startsWith(active + ':')
+    lastBottomKeyRef.current = key
+    if (convChanged || atBottomRef.current || (last && last.self)) {
+      if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+      setNewBelow(0)
+    } else if (last && !last.system) setNewBelow((n) => n + 1)
+  }, [convos, active])
+
+  // 加载更早消息后恢复滚动位置，避免跳动
+  useLayoutEffect(() => {
+    if (!loadingOlderRef.current || !scrollRef.current) return
+    const el = scrollRef.current
+    el.scrollTop = el.scrollHeight - prevScrollGapRef.current
+    loadingOlderRef.current = false
+  }, [visibleCount])
+
+  useEffect(() => {
+    if (!api.store || !api.store.setDraft) return undefined
+    const conv = active
+    const value = text
+    const id = setTimeout(() => {
+      api.store.setDraft(conv, value)
+      setDrafts((prev) => {
+        const next = { ...prev }
+        if (value && value.trim()) next[conv] = value
+        else delete next[conv]
+        return next
+      })
+    }, 500)
+    return () => clearTimeout(id)
+  }, [active, text])
+
+  function pushMsg (convId, msg) {
+    setConvos((prev) => { const list = prev[convId] || []; if (msg.mid && list.some((x) => x.mid === msg.mid)) return prev; return { ...prev, [convId]: [...list, msg] } })
+  }
+  function upsertGroupLocal (group) {
+    if (!group || !group.id) return
+    setGroups((prev) => {
+      const i = prev.findIndex((g) => g.id === group.id)
+      if (i < 0) return [...prev, group]
+      const next = prev.slice()
+      next[i] = { ...next[i], ...group }
+      return next
+    })
+  }
+  // 后台失焦期间收到的通知先驻留，回到窗口后再错峰移除
+  const pendingToastsRef = useRef([])
+  // 柔和移除：先播放滑出动画，再从列表删除
+  function removeToastSoft (id) {
+    setToasts((prev) => prev.map((x) => (x.id === id ? { ...x, leaving: true } : x)))
+    setTimeout(() => setToasts((prev) => prev.filter((x) => x.id !== id)), 320)
+  }
+  function scheduleToastExpiry (id, delay = 4200) {
+    setTimeout(() => removeToastSoft(id), delay)
+  }
+  function addToast (t) {
+    const id = ++toastSeq.current
+    setToasts((prev) => [...prev, { id, ...t }])
+    if (document.hasFocus()) scheduleToastExpiry(id)
+    else pendingToastsRef.current.push(id)
+  }
+  useEffect(() => {
+    const flush = () => {
+      const ids = pendingToastsRef.current
+      pendingToastsRef.current = []
+      // 驻留的提示逐条错峰消失，而不是一次性全部消失
+      ids.forEach((id, i) => scheduleToastExpiry(id, 4200 + i * 800))
+    }
+    window.addEventListener('focus', flush)
+    return () => window.removeEventListener('focus', flush)
+  }, [])
+  function handleIncoming (m) {
+    if (m.scope === 'group') return
+    const convId = m.scope === 'room' && m.room ? m.room.id : m.from
+    if (m.room) upsertGroupLocal(m.room)
+    if (m.name && !m.self) setNameById((prev) => ({ ...prev, [m.from]: m.name }))
+    pushMsg(convId, m)
+    if (m.self) return // 自己操作产生的系统消息进入会话，但不计未读、不弹通知
+    if (m.system === 'avatar-changed') return // 群头像更新只保留聊天框内文字，不计未读、不弹通知
+    if (convId !== activeRef.current) setUnread((u) => ({ ...u, [convId]: (u[convId] || 0) + 1 }))
+    // 这里仅处理会话状态，系统通知由主进程负责
+  }
+  function selectConv (id) {
+    const prev = activeRef.current
+    if (prev !== id) {
+      setDrafts((d) => {
+        const next = { ...d }
+        if (text && text.trim()) next[prev] = text
+        else delete next[prev]
+        return next
+      })
+      if (api.store.setDraft) api.store.setDraft(prev, text)
+      setText(drafts[id] || '')
+    }
+    setActive(id); setUnread((u) => ({ ...u, [id]: 0 }))
+    setVisibleCount(MSG_PAGE)
+    atBottomRef.current = true
+    setAtBottom(true)
+    setNewBelow(0)
+    setDragOver(false)
+    setSelectMode(false)
+    setSelected({})
+    setPendingAtts([])
+  }
+  // 消息分页加载：接近顶部时加载更早记录
+  function loadOlderMessages () {
+    const el = scrollRef.current
+    const total = (convosRef.current[activeRef.current] || []).length
+    if (!el || loadingOlderRef.current || visibleCountRef.current >= total) return
+    loadingOlderRef.current = true
+    prevScrollGapRef.current = el.scrollHeight - el.scrollTop
+    setVisibleCount((c) => Math.min(total, c + MSG_PAGE))
+  }
+  function onMessagesScroll () {
+    const el = scrollRef.current
+    if (!el) return
+    if (el.scrollTop < 40) loadOlderMessages()
+    const near = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+    atBottomRef.current = near
+    setAtBottom(near)
+    if (near) setNewBelow(0)
+  }
+  function jumpToBottom () {
+    const el = scrollRef.current
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+    setNewBelow(0)
+  }
+  function roomById (id) { return (groups || []).find((g) => g.id === id) || null }
+  function peerById (id) { return (peers || []).find((p) => p.id === id) || null }
+  function hasOnlineRoomRecipient (room) {
+    if (!room || !Array.isArray(room.members)) return false
+    const online = new Set((peers || []).filter((p) => p.online).map((p) => p.id))
+    return room.members.some((id) => id !== (self && self.id) && online.has(id))
+  }
+  function canSendToConv (id) {
+    const room = roomById(id)
+    if (room) return hasOnlineRoomRecipient(room)
+    const peer = peerById(id)
+    return !!(peer && peer.online)
+  }
+  async function sendTextToConv (convId, value, opts) {
+    const room = roomById(convId)
+    if (room) {
+      if (!hasOnlineRoomRecipient(room)) return { ok: false, error: '群成员均离线，暂时无法发送' }
+      return api.p2p.sendRoom(room.id, value, opts)
+    }
+    const peer = peerById(convId)
+    if (!peer || !peer.online) return { ok: false, error: '对方离线，暂时无法发送' }
+    return api.p2p.sendPrivate(convId, value, opts)
+  }
+  async function handleSend () {
+    const t = text.trim()
+    const atts = pendingAtts
+    if ((!t && !atts.length) || !self) return
+    const conv = activeRef.current
+    const batchId = ((t ? 1 : 0) + atts.length) > 1 ? ('b-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7)) : null
+    if (t) {
+      const opts = { burn: burnOn, ttl: burnTtl, batch: batchId }
+      if (replyTo) opts.reply = { name: replyTo.name, text: (replyTo.text || '').slice(0, 80) }
+      const res = await sendTextToConv(conv, t, opts)
+      if (res && res.ok) {
+        setText(''); setEmojiOpen(false); setReplyTo(null)
+        setDrafts((prev) => { const n = { ...prev }; delete n[conv]; return n })
+        if (api.store.setDraft) api.store.setDraft(conv, '')
+        pushMsg(conv, res.msg)
+      } else { showChatNotice((res && res.error) || '发送失败'); return }
+    }
+    if (atts.length) {
+      const target = fileSendTarget()
+      if (target.error) { showChatNotice(target.error); return }
+      sendFiles(atts.map((a) => a.path), batchId)
+      setPendingAtts([])
+    }
+  }
+  function onKeyDown (e) {
+    if (e.key !== 'Enter') return
+    const k = settingsRef.current.sendKey || 'enter'
+    if (k === 'ctrlEnter') { if (e.ctrlKey || e.metaKey) { e.preventDefault(); handleSend() } }
+    else if (!e.shiftKey) { e.preventDefault(); handleSend() }
+  }
+  function onTextChange (e) {
+    setText(e.target.value)
+    const conv = activeRef.current
+    if (!conv || settingsRef.current.showTyping === false) return
+    const room = roomById(conv)
+    const canType = room ? hasOnlineRoomRecipient(room) : peerById(conv)?.online
+    if (canType) {
+      const t = Date.now()
+      if (t - lastTypingRef.current > 2000) { lastTypingRef.current = t; api.p2p.sendTyping(conv) }
+    }
+  }
+  // 计算当前会话的文件发送参数，不可发送时返回提示文案
+  function fileSendTarget () {
+    const conv = activeRef.current
+    const room = roomById(conv)
+    if (room) {
+      if (!hasOnlineRoomRecipient(room)) return { error: '群成员均离线，暂时无法发送文件' }
+      return { scope: 'room', toId: conv }
+    }
+    if (!peerById(conv)?.online) return { error: '对方离线，暂时无法发送文件' }
+    return { scope: 'private', toId: conv }
+  }
+  function sendFiles (paths, batch) {
+    if (!paths || !paths.length) return
+    const t = fileSendTarget()
+    if (t.error) { showChatNotice(t.error); return }
+    api.file.send(t.scope, t.toId, paths, batch || null).then((out) => { (out || []).forEach((msg) => pushMsg(activeRef.current, msg)) })
+  }
+  async function attachFiles () {
+    if (!api.file.choose) { showChatNotice('当前环境不支持选择文件'); return }
+    const list = await api.file.choose()
+    if (list && list.length) setPendingAtts((prev) => [...prev, ...list])
+  }
+  async function takeShot (mode) {
+    setShotOpen(false)
+    if (!api.shot || !api.shot.begin) { showChatNotice('当前环境不支持截图'); return }
+    const res = await api.shot.begin(mode)
+    if (res && res.error) showChatNotice(res.error)
+  }
+  function removePendingAtt (idx) {
+    setPendingAtts((prev) => prev.filter((_, i) => i !== idx))
+  }
+  function onDropFiles (e) {
+    e.preventDefault()
+    const items = Array.from(e.dataTransfer.files || [])
+      .filter((f) => f.path)
+      .map((f) => ({ path: f.path, name: f.name, size: f.size, preview: (f.type || '').startsWith('image/') ? URL.createObjectURL(f) : '' }))
+    if (items.length) setPendingAtts((prev) => [...prev, ...items])
+  }
+  function removeOffer (mid) { setConvos((prev) => { const n = {}; for (const k of Object.keys(prev)) n[k] = prev[k].filter((x) => !(x.mid === mid && x.type === 'file-offer')); return n }) }
+  function acceptFile (mid) { api.file.accept(mid); removeOffer(mid) }
+  function rejectFile (mid) { api.file.reject(mid); removeOffer(mid) }
+  function applyReaction (conv, mid, emoji, from) {
+    setConvos((prev) => ({
+      ...prev,
+      [conv]: (prev[conv] || []).map((x) => {
+        if (x.mid !== mid) return x
+        const reactions = { ...(x.reactions || {}) }
+        const ids = reactions[emoji] ? reactions[emoji].slice() : []
+        if (!ids.includes(from)) ids.push(from)
+        reactions[emoji] = ids
+        return { ...x, reactions }
+      }),
+    }))
+  }
+  function doReply (m) { setReplyTo({ name: m.self ? '我' : (m.name || '对方'), text: m.recalled ? '[已撤回]' : (m.text || (m.type === 'file' ? ('[文件] ' + (m.fname || '')) : '')) }) }
+  // 撤回：先本地标记，再通知对方
+  function markRecalledLocal (mid) {
+    setConvos((prev) => ({ ...prev, [activeRef.current]: (prev[activeRef.current] || []).map((x) => x.mid === mid ? { ...x, recalled: true, recalledText: x.self ? (x.text || '') : '', text: '' } : x) }))
+  }
+  function doRecall (m) {
+    const conv = activeRef.current
+    const room = roomById(conv)
+    const scope = room ? 'room' : 'private'
+    const toId = room ? room.id : conv
+    api.msg.recall(scope, toId, m.mid)
+    markRecalledLocal(m.mid)
+  }
+  // 重新编辑撤回消息：原文回填到输入框
+  function reEdit (m) {
+    if (!m.recalledText) return
+    setText(m.recalledText)
+    focusComposer()
+  }
+  function doReact (m, emoji) {
+    const conv = activeRef.current
+    const room = roomById(conv)
+    const scope = room ? 'room' : 'private'
+    const toId = room ? room.id : conv
+    api.msg.react(scope, toId, m.mid, emoji)
+    applyReaction(conv, m.mid, emoji, self ? self.id : 'me')
+  }
+  function toggleSelect (mid) { setSelected((prev) => { const n = { ...prev }; if (n[mid]) delete n[mid]; else n[mid] = true; return n }) }
+  function doForward (targetConv) {
+    const srcConv = activeRef.current
+    const msgs = (convos[srcConv] || []).filter((x) => selected[x.mid] && x.text && !x.recalled)
+    if (!msgs.length) { setSelectMode(false); setSelected({}); setForwardOpen(false); return }
+    ;(async () => {
+      if (forwardMode === 'merge' && msgs.length > 1) {
+        const lines = msgs.map((x) => (x.self ? (self ? self.name : '我') : (x.name || '对方')) + ': ' + x.text)
+        const res = await sendTextToConv(targetConv, lines.join('\n'), { fwd: { name: convTitle(srcConv) + ' 的聊天记录', count: msgs.length } })
+        if (res && res.ok) pushMsg(targetConv, res.msg)
+      } else {
+        for (const x of msgs) {
+          const res = await sendTextToConv(targetConv, x.text, { fwd: { name: x.self ? (self ? self.name : '我') : (x.name || '对方') } })
+          if (res && res.ok) pushMsg(targetConv, res.msg)
+        }
+      }
+    })()
+    setSelectMode(false); setSelected({}); setForwardOpen(false)
+  }
+  // 字体面板：聊天字号滑块跟随设置，仅作用于聊天框，不影响全局
+  useEffect(() => { setFontDraft(settings.chatFontPx || 13.5) }, [settings.chatFontPx])
+
+  useEffect(() => { setNudgeDraft(settings.nudgeText || '') }, [settings.nudgeText])
+  const nudgeHoverTimerRef = useRef(null)
+  function openNudgeHover () {
+    if (nudgeHoverTimerRef.current) { clearTimeout(nudgeHoverTimerRef.current); nudgeHoverTimerRef.current = null }
+    setNudgeHover(true)
+  }
+  function closeNudgeHover () {
+    if (nudgeHoverTimerRef.current) clearTimeout(nudgeHoverTimerRef.current)
+    nudgeHoverTimerRef.current = setTimeout(() => { setNudgeHover(false); commitNudgeText() }, 300)
+  }
+  useEffect(() => () => { if (nudgeHoverTimerRef.current) clearTimeout(nudgeHoverTimerRef.current) }, [])
+  function commitNudgeText () {
+    const next = nudgeDraft.slice(0, 20)
+    if (next !== (settingsRef.current.nudgeText || '')) patchSettings({ nudgeText: next })
+  }
+
+  function startPaneDrag (e) {
+    e.preventDefault()
+    const startX = e.clientX
+    const startW = paneWidth || Math.round(window.innerWidth * 0.2)
+    const clamp = (w) => Math.max(200, Math.min(560, w))
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    const move = (ev) => setPaneWidth(clamp(startW + (startX - ev.clientX)))
+    const up = (ev) => {
+      document.removeEventListener('mousemove', move)
+      document.removeEventListener('mouseup', up)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      setPaneWidth(clamp(startW + (startX - ev.clientX)))
+    }
+    document.addEventListener('mousemove', move)
+    document.addEventListener('mouseup', up)
+  }
+
+  // 个性状态：输入时防止中文输入法重复提交
+  const sigInputRef = useRef(null)
+  const sigComposingRef = useRef(false)
+  const sigTimerRef = useRef(null)
+  useEffect(() => {
+    if (document.activeElement !== sigInputRef.current && !sigComposingRef.current) setSigDraft(settings.statusText || '')
+  }, [settings.statusText])
+  useEffect(() => () => { if (sigTimerRef.current) clearTimeout(sigTimerRef.current) }, [])
+  function commitSig (value) {
+    const next = (value == null ? sigDraft : value).slice(0, 40)
+    if (sigTimerRef.current) { clearTimeout(sigTimerRef.current); sigTimerRef.current = null }
+    if (next !== (settingsRef.current.statusText || '')) patchSettings({ statusText: next })
+  }
+  function scheduleSigSave (value) {
+    if (sigTimerRef.current) clearTimeout(sigTimerRef.current)
+    sigTimerRef.current = setTimeout(() => commitSig(value), 450)
+  }
+
+  // 定位到某条消息：必要时先切换会话，再滚动到消息并高亮
+  const flashTimerRef = useRef(null)
+  function locateMessage (conv, mid) {
+    if (!mid) return
+    if (activeRef.current !== conv) selectConv(conv)
+    // 历史面板定位旧消息时，先扩展可见范围
+    const list = convosRef.current[conv] || []
+    const idx = list.findIndex((x) => x.mid === mid)
+    if (idx >= 0) {
+      const need = list.length - idx + 5
+      if (need > visibleCountRef.current) setVisibleCount(Math.min(list.length, need))
+    }
+    setTimeout(() => {
+      const sel = (window.CSS && CSS.escape) ? CSS.escape(mid) : String(mid).replace(/"/g, '\\"')
+      const el = document.querySelector(`[data-mid="${sel}"]`)
+      if (!el) { showChatNotice('没有找到这条消息'); return }
+      el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      setFlashMid(mid)
+      if (flashTimerRef.current) clearTimeout(flashTimerRef.current)
+      flashTimerRef.current = setTimeout(() => setFlashMid(null), 1800)
+    }, 120)
+  }
+  function insertMention (name) { setText((t) => t.replace(/@(\S*)$/, '@' + name + ' ')) }
+  function togglePin (id) { const cur = settings.pinned || []; patchSettings({ pinned: cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id] }) }
+  function toggleMute (id) { const cur = settings.muted || []; patchSettings({ muted: cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id] }) }
+  function openCreateGroup () {
+    setGroupName('')
+    setGroupMembers({})
+    setShowCreateGroup(true)
+  }
+  function toggleGroupMember (id) {
+    setGroupMembers((prev) => ({ ...prev, [id]: !prev[id] }))
+  }
+  async function createGroup () {
+    const members = Object.keys(groupMembers).filter((id) => groupMembers[id])
+    if (!groupName.trim()) { setNetError('\u8bf7\u8f93\u5165\u7fa4\u804a\u540d\u79f0'); return }
+    if (!members.length) { setNetError('\u8bf7\u81f3\u5c11\u9009\u62e9\u4e00\u540d\u6210\u5458'); return }
+    const group = await api.store.createGroup(groupName.trim(), members)
+    if (!group) { setNetError('\u521b\u5efa\u7fa4\u804a\u5931\u8d25'); return }
+    upsertGroupLocal(group)
+    setShowCreateGroup(false)
+    selectConv(group.id)
+  }
+
+  async function changeGroupAvatar (group) {
+    if (!group || !api.avatar || !api.avatar.pickImage || !api.store.setGroupAvatar) return
+    const res = await api.avatar.pickImage()
+    if (res && res.ok) {
+      const compact = (await compressImageDataUrl(res.dataUrl, 96)) || res.dataUrl
+      const next = await api.store.setGroupAvatar(group.id, { type: 'image', imageDataUrl: compact, zoom: 120, x: 50, y: 50 })
+      if (next) { upsertGroupLocal(next); setGroupManage(next) } else showChatNotice('\u4fee\u6539\u7fa4\u5934\u50cf\u5931\u8d25')
+    } else if (res && res.error) showChatNotice(res.error)
+  }
+
+  async function resetGroupAvatar (group) {
+    if (!group || !api.store.setGroupAvatar) return
+    const next = await api.store.setGroupAvatar(group.id, null)
+    if (next) { upsertGroupLocal(next); setGroupManage(next) }
+  }
+
+  function leaveGroup (group) {
+    if (!group) return
+    setConfirmAction({
+      title: '\u9000\u51fa\u7fa4\u804a',
+      text: '\u9000\u51fa“' + (group.name || '\u7fa4\u804a') + '”\u540e\uff0c\u4f60\u5c06\u4e0d\u518d\u63a5\u6536\u8be5\u7fa4\u7684\u6d88\u606f\u3002',
+      confirmText: '\u9000\u51fa',
+      run: async () => {
+        const res = await api.store.leaveGroup(group.id)
+        if (!res || !res.ok) { showChatNotice('\u9000\u51fa\u7fa4\u804a\u5931\u8d25'); return }
+        setGroups((prev) => prev.filter((g) => g.id !== group.id))
+        setConvos((prev) => { const n = { ...prev }; delete n[group.id]; return n })
+        setUnread((u) => { const n = { ...u }; delete n[group.id]; return n })
+        if (activeRef.current === group.id) setActive('')
+        if (groupManage && groupManage.id === group.id) setGroupManage(null)
+      },
+    })
+  }
+
+  async function transferGroupOwner (group, ownerId) {
+    if (!group || !ownerId || group.ownerId === ownerId) return
+    const next = await api.store.transferGroupOwner(group.id, ownerId)
+    if (next) {
+      upsertGroupLocal(next)
+      setGroupManage(next)
+    } else setNetError('\u8f6c\u8ba9\u7fa4\u4e3b\u5931\u8d25')
+  }
+
+  function removeMember (group, member) {
+    if (!group || !member || !api.store.removeGroupMember) return
+    setConfirmAction({
+      title: '\u79fb\u51fa\u6210\u5458',
+      text: '\u5c06 ' + (member.name || member.id) + ' \u79fb\u51fa\u8be5\u7fa4\uff1f',
+      confirmText: '\u79fb\u51fa',
+      run: async () => {
+        const res = await api.store.removeGroupMember(group.id, member.id)
+        if (res && res.ok && res.group) {
+          upsertGroupLocal(res.group)
+          if (groupManage && groupManage.id === group.id) setGroupManage(res.group)
+        } else showChatNotice((res && res.error) || '\u79fb\u51fa\u6210\u5458\u5931\u8d25')
+      },
+    })
+  }
+
+  async function addGroupMembers (group, ids) {
+    if (!group || !ids || !ids.length || !api.store.addGroupMembers) return
+    const res = await api.store.addGroupMembers(group.id, ids)
+    if (res && res.ok && res.group) {
+      upsertGroupLocal(res.group)
+      if (groupManage && groupManage.id === group.id) setGroupManage(res.group)
+      if (activeRef.current === group.id) setNetError(null)
+    } else {
+      showChatNotice((res && res.error) || '添加成员失败')
+    }
+  }
+
+  function removeGroupMember (group, member) {
+    removeMember(group, member)
+  }
+
+  function focusComposer () {
+    if (api.win && api.win.focus) api.win.focus()
+    ;[0, 60, 180].forEach((delay) => {
+      setTimeout(() => {
+        if (!composerRef.current) return
+        composerRef.current.focus()
+        try { composerRef.current.setSelectionRange(composerRef.current.value.length, composerRef.current.value.length) } catch (_) {}
+      }, delay)
+    })
+  }
+
+  function runClearConv (id) {
+    api.store.clearConversation(id)
+    if (api.store.setDraft) api.store.setDraft(id, '')
+    setConvos((prev) => ({ ...prev, [id]: [] }))
+    setDrafts((prev) => { const n = { ...prev }; delete n[id]; return n })
+    if (activeRef.current === id) setText('')
+    focusComposer()
+  }
+
+  function clearConv (id) {
+    setConfirmAction({
+      title: '\u6e05\u7a7a\u4f1a\u8bdd',
+      text: '\u5c06\u6e05\u7a7a\u672c\u4f1a\u8bdd\u7684\u804a\u5929\u8bb0\u5f55\u548c\u8349\u7a3f\uff0c\u6b64\u64cd\u4f5c\u4e0d\u53ef\u6062\u590d\u3002',
+      confirmText: '\u6e05\u7a7a',
+      run: () => runClearConv(id),
+    })
+  }
+
+  function clearAllHistory () {
+    setShowSettings(false)
+    setConfirmAction({
+      title: '\u6e05\u7a7a\u5168\u90e8\u804a\u5929\u8bb0\u5f55',
+      text: '\u5c06\u6e05\u7a7a\u6240\u6709\u4f1a\u8bdd\u7684\u804a\u5929\u8bb0\u5f55\uff0c\u6b64\u64cd\u4f5c\u4e0d\u53ef\u6062\u590d\u3002',
+      confirmText: '\u6e05\u7a7a',
+      run: () => {
+        api.store.clearHistory()
+        setConvos({})
+        setUnread({})
+        focusComposer()
+      },
+    })
+  }
+
+  function clearAllDrafts () {
+    setShowSettings(false)
+    setConfirmAction({
+      title: '\u6e05\u7a7a\u8349\u7a3f',
+      text: '\u5c06\u6e05\u7a7a\u6240\u6709\u4f1a\u8bdd\u8349\u7a3f\u3002',
+      confirmText: '\u6e05\u7a7a',
+      run: () => {
+        if (api.store.clearDrafts) api.store.clearDrafts()
+        setDrafts({})
+        setText('')
+        focusComposer()
+      },
+    })
+  }
+
+  const nudgeTimesRef = useRef([])
+  function nudgeActive () {
+    const conv = activeRef.current
+    if (!conv) return
+    if (roomById(conv)) return
+    if (!peerById(conv)?.online) { showChatNotice('\u5bf9\u65b9\u79bb\u7ebf\uff0c\u6682\u4e0d\u652f\u6301\u622a\u4e00\u622a'); return }
+    const nowTs = Date.now()
+    nudgeTimesRef.current = nudgeTimesRef.current.filter((t) => nowTs - t < 10000)
+    if (nudgeTimesRef.current.length >= 5) { showChatNotice('\u622a\u5f97\u592a\u9891\u7e41\u4e86\uff0c10 \u79d2\u5185\u6700\u591a 5 \u6b21'); return }
+    nudgeTimesRef.current.push(nowTs)
+    api.p2p.nudge(conv)
+    const t = (settingsRef.current.nudgeText || '').trim()
+    const peerName = nameByIdRef.current[conv] || (peerById(conv) || {}).name || '\u5bf9\u65b9'
+    pushMsg(conv, { mid: 'nudge-' + nowTs, system: true, text: '\u4f60\u622a\u4e86\u622a ' + peerName + (t ? ':' + t : ''), ts: nowTs })
+    addToast({ title: '\u5df2\u53d1\u9001', text: t || '\u622a\u4e86\u5bf9\u65b9\u4e00\u4e0b \ud83d\udc4b', conv })
+  }
+
+  async function renameSelf (name) { const s = await api.p2p.setName(name); if (s) setSelf(s) }
+  async function patchSettings (patch) {
+    const s = await api.settings.set(patch); if (!s) return
+    setSettings(s)
+    if ('burnDefault' in patch) setBurnOn(!!s.burnDefault)
+    if ('burnTtl' in patch) setBurnTtl(s.burnTtl || 10)
+    if ('statusText' in patch) setSelf((prev) => (prev ? { ...prev, status: s.statusText || '' } : prev))
+    if ('theme' in patch || 'fontPx' in patch || 'uiStyle' in patch || 'chatFont' in patch || 'chatFontPx' in patch) setDisplay({ theme: s.theme, fontPx: s.fontPx, uiStyle: s.uiStyle, chatFont: s.chatFont, chatFontPx: s.chatFontPx })
+  }
+  const onlineCount = peers.filter((p) => p.online).length
+  const presence = PRESENCE.find((p) => p.key === settings.presence) || PRESENCE[0]
+  const activeRoom = roomById(active)
+  const isRoom = !!activeRoom
+  const activePeer = isRoom ? null : peers.find((p) => p.id === active)
+  const messages = convos[active] || []
+  const visibleMessages = messages.length > visibleCount ? messages.slice(-visibleCount) : messages
+  const hiddenCount = messages.length - visibleMessages.length
+  const renderUnits = []
+  for (const m of visibleMessages) {
+    const prev = renderUnits[renderUnits.length - 1]
+    const groupable = !!m.batch && !m.system && !m.recalled && m.type !== 'file-offer' && !m.burn
+    if (groupable && prev && prev.groupable && prev.batch === m.batch && prev.self === !!m.self && prev.from === m.from) prev.items.push(m)
+    else renderUnits.push({ key: (m.mid || ('i' + renderUnits.length)), batch: m.batch || null, groupable, self: !!m.self, from: m.from, items: [m] })
+  }
+  // Telegram 式发送者分组：同一人 5 分钟内连续发送的消息共用头像、时间和表情回应
+  const SENDER_GAP = 5 * 60000
+  const senderGroups = []
+  for (const u of renderUnits) {
+    const m0 = u.items[0]
+    const groupable = !m0.system && !m0.recalled && m0.type !== 'file-offer'
+    const prev = senderGroups[senderGroups.length - 1]
+    const prevUnit = prev ? prev.units[prev.units.length - 1] : null
+    const prevLast = prevUnit ? prevUnit.items[prevUnit.items.length - 1] : null
+    if (groupable && prev && prev.groupable && prev.self === u.self && prev.from === u.from && prevLast && (m0.ts - prevLast.ts) < SENDER_GAP && dayLabel(m0.ts) === dayLabel(prevLast.ts)) prev.units.push(u)
+    else senderGroups.push({ key: u.key, self: u.self, from: u.from, groupable: groupable, units: [u] })
+  }
+  const messageAvatar = (m) => {
+    if (!m || m.self) return settings.avatar
+    const p = peerById(m.from)
+    return (p && p.avatar) || m.avatar || null
+  }
+  const mMatch = text.match(/@(\S*)$/)
+  const roomMembers = activeRoom
+    ? (activeRoom.members || []).map((id) => (id === (self && self.id) ? { id, name: self.name, online: true, self: true, presence: settings.presence || 'online', avatar: settings.avatar } : (peers.find((p) => p.id === id) || { id, name: nameById[id] || id.slice(0, 6), online: false })))
+    : []
+  const mentionBase = isRoom ? roomMembers.filter((p) => !p.self) : peers.filter((p) => p.online)
+  const mentionList = (isRoom && mMatch) ? mentionBase.filter((p) => (p.name || '').toLowerCase().includes(mMatch[1].toLowerCase())).slice(0, 6) : []
+  // 正在输入：取某会话内仍有效的输入者名称，多人时显示“a、b 等 n 人”
+  const typingNamesOf = (convId) => {
+    const m = typingPeers[convId] || {}
+    return Object.keys(m).filter((id) => m[id] > now && id !== (self && self.id)).map((id) => nameById[id] || '有人')
+  }
+  const typingLabel = (names) => {
+    if (!names.length) return ''
+    const head = names.length <= 2 ? names.join('、') : (names.slice(0, 2).join('、') + ` 等 ${names.length} 人`)
+    return head + ' 正在输入'
+  }
+  const peerTyping = activePeer && typingNamesOf(active).length > 0
+  const roomTyping = typingLabel(activeRoom ? typingNamesOf(active) : [])
+  const pinned = settings.pinned || []
+  const muted = settings.muted || []
+  const isPinned = (id) => pinned.includes(id)
+  const isMuted = (id) => muted.includes(id)
+  const sortedPeers = peers.slice().sort((a, b) => {
+    const pa = isPinned(a.id) ? 0 : 1
+    const pb = isPinned(b.id) ? 0 : 1
+    if (pa !== pb) return pa - pb
+    return a.name.localeCompare(b.name)
+  })
+  const activeDraft = drafts[active]
+  const canSendActive = canSendToConv(active)
+  const canAttachActive = (!!activePeer && activePeer.online) || (isRoom && hasOnlineRoomRecipient(activeRoom))
+  const selectedMemberCount = Object.values(groupMembers).filter(Boolean).length
+  const managedGroup = groupManage ? (groups.find((g) => g.id === groupManage.id) || groupManage) : null
+  const managedMembers = managedGroup
+    ? (managedGroup.members || []).map((id) => (id === (self && self.id) ? { id, name: self.name, online: true, self: true, presence: settings.presence || 'online', avatar: settings.avatar } : (peers.find((p) => p.id === id) || { id, name: nameById[id] || id.slice(0, 6), online: false })))
+    : []
+  const convTitle = (id) => {
+    const room = roomById(id)
+    if (room) return room.name || '群聊'
+    return nameById[id] || (peerById(id) && peerById(id).name) || '私聊'
+  }
+  const lastMsgOf = (id) => {
+    const list = convos[id] || []
+    return list.length ? list[list.length - 1] : null
+  }
+  const sideTime = (ts) => {
+    if (!ts) return ''
+    const d = dayLabel(ts)
+    return d === '今天' ? fmtTime(ts).slice(0, 5) : d
+  }
+  const msgPreview = (id, fallback) => {
+    const draft = drafts[id]
+    if (draft && draft.trim()) return '草稿: ' + draft.trim()
+    const m = lastMsgOf(id)
+    if (!m) return fallback
+    if (m.recalled) return (m.self ? '你' : (m.name || '对方')) + '撤回了一条消息'
+    if (m.type === 'file' || m.type === 'file-offer') return (m.self ? '我: ' : '') + '[文件] ' + (m.fname || '')
+    const body = (m.text || '').trim() || (m.system ? '系统消息' : '')
+    if (!body) return fallback
+    if (m.self) return '我: ' + body
+    if (roomById(id) && m.name) return m.name + ': ' + body
+    return body
+  }
+  const onlineMemberCount = (group) => {
+    const online = new Set(peers.filter((p) => p.online).map((p) => p.id))
+    return (group.members || []).filter((id) => id !== (self && self.id) && online.has(id)).length
+  }
+  const conversationItems = [
+    ...groups.map((g) => ({ id: g.id, kind: 'room', title: g.name || '群聊', group: g, subtitle: `${(g.members || []).length} 位成员 · ${onlineMemberCount(g)} 在线`, last: lastMsgOf(g.id) })),
+    ...peers.map((p) => ({ id: p.id, kind: 'peer', title: p.name, peer: p, subtitle: p.online ? (p.status || presenceOf(p).label) : '离线', last: lastMsgOf(p.id) })),
+  ].map((item) => ({
+    ...item,
+    lastTs: item.last ? (item.last.ts || 0) : 0,
+    preview: msgPreview(item.id, item.subtitle),
+    timeLabel: sideTime(item.last ? item.last.ts : 0),
+  }))
+  const sideNeedle = sideQuery.trim().toLowerCase()
+  const sideConversations = conversationItems
+    .filter((item) => {
+      if (sideNeedle && !((item.title || '').toLowerCase().includes(sideNeedle) || (item.preview || '').toLowerCase().includes(sideNeedle))) return false
+      if (sideTab === 'groups') return item.kind === 'room'
+      if (sideTab === 'online') return item.kind === 'peer' && item.peer && item.peer.online
+      return true
+    })
+    .sort((a, b) => {
+      const pa = isPinned(a.id) ? 0 : 1
+      const pb = isPinned(b.id) ? 0 : 1
+      if (pa !== pb) return pa - pb
+      if (sideTab === 'all') return (b.lastTs || 0) - (a.lastTs || 0) || a.title.localeCompare(b.title)
+      return a.title.localeCompare(b.title)
+    })
+  let lastDay = null
+
+  return (
+    <div className={'h-full flex flex-col ' + (shake ? 'shake' : '')}>
+      <TopBar self={self} onGlobalSearch={() => setSearchPane((v) => (v === 'global' ? false : 'global'))} />
+      {netError && <div className="px-4 py-1 text-xs text-amber-400 shrink-0">网络提示：{netError}</div>}
+
+      <div className={'app-stage flex-1 min-h-0 ' + (standalone ? 'chat-only-shell flex' : 'three-pane-layout')} style={!standalone && paneWidth ? { gridTemplateColumns: `minmax(220px, 20%) minmax(480px, 1fr) 5px ${paneWidth}px` } : undefined}>
+        {!standalone && <aside className="sidebar-surface flex flex-col overflow-hidden min-w-0 border-r bd-soft">
+          <div className="p-4 border-b bd-soft">
+            <div className="flex items-center gap-3">
+              <button onClick={() => setShowProfile(true)} title="我的资料" className="shrink-0 rounded-full transition hover:opacity-90">
+                <Avatar name={self ? self.name : '?'} id={self ? self.id : ''} avatar={settings.avatar} size={40} />
+              </button>
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-semibold txt truncate flex items-center gap-1.5">
+                  <span className="truncate">{self ? self.name : 'iLink'}</span>
+                  {settings.anonymous && <span className="shrink-0 text-[10px] inline-flex items-center gap-0.5" style={{ color: '#ff9f0a' }}><EyeOff size={11} /> 匿名</span>}
+                </div>
+                {/* 状态选择 + 个性签名 */}
+                <div className="mt-0.5 flex items-center gap-2">
+                  <div className="relative shrink-0">
+                    <button onClick={() => setPresenceOpen((v) => !v)} className="flex items-center gap-1.5 text-[11px] txt-dim hover:opacity-80">
+                      <span className={'w-2 h-2 rounded-full shrink-0 ' + (presence.key === 'online' ? 'dot-pulse' : '')} style={{ background: presence.color }} />
+                      {presence.label}
+                      <ChevronDown size={10} className={'transition ' + (presenceOpen ? 'rotate-180' : '')} />
+                    </button>
+                    {presenceOpen && (
+                      <div className="absolute left-0 top-full mt-1 z-20 glass-panel rounded-xl p-1 w-32">
+                        {PRESENCE.map((p) => (
+                          <button key={p.key} onClick={() => { patchSettings({ presence: p.key }); setPresenceOpen(false) }} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs txt hover:bg-white/10 text-left">
+                            <span className="w-2 h-2 rounded-full shrink-0" style={{ background: p.color }} />
+                            <span className="flex-1">{p.label}</span>
+                            {presence.key === p.key && <Check size={12} className="accent-txt shrink-0" />}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <input
+                    ref={sigInputRef}
+                    value={sigDraft}
+                    maxLength={40}
+                    onChange={(e) => { const v = e.target.value.slice(0, 40); setSigDraft(v); if (!sigComposingRef.current) scheduleSigSave(v) }}
+                    onCompositionStart={() => { sigComposingRef.current = true }}
+                    onCompositionEnd={(e) => { sigComposingRef.current = false; const v = e.currentTarget.value.slice(0, 40); setSigDraft(v); scheduleSigSave(v) }}
+                    onBlur={() => commitSig()}
+                    placeholder="输入个性状态"
+                    className="field flex-1 min-w-0 rounded-lg px-2 py-0.5 text-[11px]"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="px-3 pt-3 pb-2 space-y-2">
+            <div className="side-search">
+              <Search size={13} className="txt-dim shrink-0" />
+              <input value={sideQuery} onChange={(e) => setSideQuery(e.target.value)} placeholder="搜索会话" className="field flex-1 min-w-0 rounded-lg px-2 py-0.5 text-[11px]" />
+              {sideQuery && <button onClick={() => setSideQuery('')} title="清除" className="txt-dim hover:opacity-70 shrink-0"><X size={12} /></button>}
+            </div>
+            <div className="seg-tabs grid grid-cols-3 gap-1">
+              <button onClick={() => setSideTab('all')} className={sideTab === 'all' ? 'seg-tab seg-tab-active' : 'seg-tab'}>全部</button>
+              <button onClick={() => setSideTab('groups')} className={sideTab === 'groups' ? 'seg-tab seg-tab-active' : 'seg-tab'}>群聊</button>
+              <button onClick={() => setSideTab('online')} className={sideTab === 'online' ? 'seg-tab seg-tab-active' : 'seg-tab'}>在线({onlineCount})</button>
+            </div>
+          </div>
+
+          <div className="flex-1 overflow-auto px-2 pb-2">
+            {sideConversations.length === 0 && (
+              <div className="flex flex-col items-center gap-2 px-4 py-8 select-none">
+                <div className="text-2xl float-soft">{sideNeedle ? '搜索' : '空'}</div>
+                <div className="text-xs txt-dim text-center leading-relaxed">{sideNeedle ? `没有找到 "${sideQuery.trim()}"` : '暂无会话或联系人'}</div>
+              </div>
+            )}
+            {sideConversations.map((item) => (
+              <div key={item.id} onClick={() => selectConv(item.id)} onContextMenu={(e) => { e.preventDefault(); setSideMenu({ x: e.clientX, y: e.clientY, item }) }} className={'side-item w-full flex items-center gap-2.5 px-2.5 py-2 text-sm cursor-pointer ' + (active === item.id ? 'side-item-active' : '')}>
+                {/* 头像 + 右上角未读角标 */}
+                <span className="relative shrink-0">
+                  {item.kind === 'peer' ? (
+                    <Avatar name={item.title} id={item.id} size={30} dim={!item.peer.online} avatar={item.peer.avatar} />
+                  ) : (
+                    <GroupAvatar group={item.group} size={30} />
+                  )}
+                  <Badge n={unread[item.id]} corner muted={isMuted(item.id)} />
+                </span>
+                <span className="flex-1 min-w-0">
+                  {/* 第一行：名称 + 身份标识 + 状态指示灯 + 置顶/免打扰 */}
+                  <span className="flex items-end gap-1.5">
+                    <span className="truncate font-medium leading-tight">{item.title}</span>
+                    {item.kind === 'room' && item.group.ownerId === (self && self.id) && <Crown size={12} className="accent-txt shrink-0 mb-0.5" />}
+                    {item.kind === 'peer' && (
+                      <span
+                        className={'w-2 h-2 rounded-full shrink-0 mb-1 ' + (presenceOf(item.peer).key === 'online' ? 'dot-pulse' : '')}
+                        style={{ background: presenceOf(item.peer).color }}
+                        title={presenceOf(item.peer).label}
+                      />
+                    )}
+                    {/* 置顶/免打扰仅作状态标识，操作收入右键菜单 */}
+                    <span className="ml-auto flex items-end gap-1 shrink-0 mb-0.5">
+                      {isPinned(item.id) && <Pin size={11} className="accent-txt" title="已置顶" />}
+                      {isMuted(item.id) && <BellOff size={11} className="txt-dim" title="已免打扰" />}
+                    </span>
+                  </span>
+                  {/* 第二行：左侧预览/输入中，右侧时间 */}
+                  <span className="flex items-center gap-2 mt-0.5">
+                    {typingNamesOf(item.id).length > 0
+                      ? <span className="flex-1 min-w-0 flex items-center text-[10px] truncate accent-txt">{typingLabel(typingNamesOf(item.id))}<span className="typing-dots"><i /><i /><i /></span></span>
+                      : <span className={'flex-1 min-w-0 block text-[10px] truncate ' + (drafts[item.id] ? 'accent-txt' : 'txt-dim')}>{item.preview}</span>}
+                    {item.timeLabel && <span className="text-[10px] txt-dim shrink-0">{item.timeLabel}</span>}
+                  </span>
+                </span>
+              </div>
+            ))}
+          </div>
+
+          {/* 底部功能区 */}
+          <div className="px-3 py-2.5 border-t bd-soft shrink-0 flex items-center gap-2">
+            <button onClick={openCreateGroup} className="btn-primary flex-1 rounded-xl px-3 py-2 text-sm font-medium inline-flex items-center justify-center gap-2">
+              <UserPlus size={15} /> 创建群聊
+            </button>
+            <button onClick={() => setShowSettings(true)} title="设置" className="icon-btn shrink-0"><Settings size={17} /></button>
+          </div>
+        </aside>}
+
+        <main className="flex-1 chat-surface flex flex-col overflow-hidden min-w-0">
+          <div className="chat-header flex items-center gap-3 px-4 border-b bd-soft shrink-0 text-sm txt">
+            {activeRoom ? (
+              <button onClick={() => setGroupManage(activeRoom)} title="查看群资料" className="flex items-center gap-3 flex-1 min-w-0 text-left hover:opacity-85 transition">
+                <GroupAvatar group={activeRoom} size={36} />
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-center gap-1.5 min-w-0">
+                    <span className="truncate font-semibold leading-tight">{activeRoom.name || '\u7fa4\u804a'}</span>
+                    {activeRoom.ownerId === (self && self.id) && <Crown size={13} className="accent-txt shrink-0" />}
+                    {isPinned(active) && <Pin size={12} className="accent-txt shrink-0" />}
+                    {isMuted(active) && <BellOff size={12} className="txt-dim shrink-0" />}
+                  </span>
+                  <span className="block text-[11px] txt-dim leading-tight mt-0.5 truncate">
+                    {roomTyping
+                      ? <span className="accent-txt inline-flex items-center">{roomTyping}<span className="typing-dots"><i /><i /><i /></span></span>
+                      : `${roomMembers.length} 位成员 · ${roomMembers.filter((p) => p.online).length} 在线`}
+                  </span>
+                </span>
+              </button>
+            ) : activePeer ? (
+              <button onClick={() => setProfilePeer(activePeer)} title="查看资料" className="flex items-center gap-3 flex-1 min-w-0 text-left hover:opacity-85 transition">
+                <span className="relative shrink-0">
+                  <Avatar name={activePeer.name} id={activePeer.id} size={36} avatar={activePeer.avatar} dim={!activePeer.online} />
+                  <span className={'absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full ' + (presenceOf(activePeer).key === 'online' ? 'dot-pulse' : '')} style={{ background: presenceOf(activePeer).color, border: '2px solid var(--bar-bg)' }} />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-semibold leading-tight">{nameById[active] || activePeer.name || '\u79c1\u804a'}</span>
+                  <span className="block text-[11px] leading-tight mt-0.5 truncate">
+                    {peerTyping
+                      ? <span className="accent-txt inline-flex items-center">正在输入...<span className="typing-dots"><i /><i /><i /></span></span>
+                      : <>
+                          <span style={{ color: presenceOf(activePeer).color }}>{presenceOf(activePeer).label}</span>
+                          {activePeer.status && <span className="txt-dim"> · {activePeer.status}</span>}
+                        </>}
+                  </span>
+                </span>
+              </button>
+            ) : (
+              <span className="inline-flex items-center gap-2 flex-1 min-w-0 txt-dim"><User size={15} /> <span className="truncate">选择左侧会话开始聊天</span></span>
+            )}
+            {active && <button onClick={() => setHistoryOpen(true)} title="聊天记录" className={'icon-btn shrink-0 ' + (historyOpen ? 'accent-txt' : '')}><History size={16} /></button>}
+            {active && <button onClick={() => setSearchPane((v) => (v ? false : 'chat'))} title="搜索聊天" className={'icon-btn shrink-0 ' + (searchPane ? 'accent-txt' : '')}><Search size={16} /></button>}
+          </div>
+          <div
+            className="relative flex-1 min-h-0"
+            onDragOver={(e) => { e.preventDefault(); if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files')) setDragOver(true) }}
+            onDragLeave={(e) => { if (!(e.relatedTarget && e.currentTarget.contains(e.relatedTarget))) setDragOver(false) }}
+            onDrop={(e) => { setDragOver(false); onDropFiles(e) }}
+          >
+          <div ref={scrollRef} onScroll={onMessagesScroll} className="messages-scroll h-full overflow-auto">
+            {hiddenCount > 0 && (
+              <div className="flex justify-center shrink-0">
+                <button onClick={loadOlderMessages} className="system-msg hover:opacity-80">↑ 上滑加载更早消息（还有 {hiddenCount} 条）</button>
+              </div>
+            )}
+            {messages.length === 0 && (
+              <div className="flex-1 flex flex-col items-center justify-center gap-2.5 select-none">
+                <div className="text-4xl float-soft">{active ? '💬' : '👋'}</div>
+                <div className="text-xs txt-dim">{active ? '还没有消息，开始聊天吧' : '选择左侧会话开始聊天'}</div>
+              </div>
+            )}
+            {senderGroups.map((sg) => {
+              const firstMsg = sg.units[0].items[0]
+              const day = dayLabel(firstMsg.ts); const sep = day !== lastDay; lastDay = day
+              const multi = sg.units.length > 1
+              const mergedR = multi ? mergeMessageReactions(sg.units) : undefined
+              const onCtx = (mm, e) => { e.preventDefault(); e.stopPropagation(); setCtxMenu({ x: e.clientX, y: e.clientY, m: mm, canRecall: mm.self && !mm.recalled && (Date.now() - mm.ts < 120000) }) }
+              return (
+                <div key={sg.key} className={multi ? 'msg-group' : undefined}>
+                  {sep && <div className="flex justify-center"><span className="day-sep">{day}</span></div>}
+                  {sg.units.map((u, ui) => {
+                    const isLastU = ui === sg.units.length - 1
+                    const m = u.items[0]
+                    const shared = {
+                      avatarSpacer: multi && !isLastU,
+                      hideMeta: multi && !isLastU,
+                      metaReactions: multi && isLastU ? mergedR : undefined,
+                    }
+                    // 同批次文字和多附件单元
+                    if (u.items.length > 1) {
+                      return (
+                        <div key={u.key}>
+                          <BatchMsg
+                            items={u.items}
+                            markdown={!!settings.markdown}
+                            showName={isRoom && !sg.self && ui === 0}
+                            selfAvatar={settings.avatar}
+                            peerAvatar={messageAvatar(m)}
+                            progressMap={fileProgress}
+                            flashMid={flashMid}
+                            onCtx={onCtx}
+                            {...shared}
+                          />
+                        </div>
+                      )
+                    }
+                    const canRecallM = m.self && !m.recalled && (Date.now() - m.ts < 120000)
+                    return (
+                      <div
+                        key={m.mid || u.key}
+                        data-mid={m.mid || undefined}
+                        className={flashMid && flashMid === m.mid ? 'msg-flash' : ''}
+                        onContextMenu={(!m.system && !m.recalled && m.mid) ? (e) => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY, m, canRecall: canRecallM }) } : undefined}
+                      >
+                        {m.system
+                          ? <div className="flex justify-center"><span className="system-msg">{m.text}</span></div>
+                          : m.recalled
+                            ? (
+                              <div className="flex justify-center">
+                                <span className="system-msg">
+                                  {m.self ? '你撤回了一条消息' : `${m.name || '对方'} 撤回了一条消息`}
+                                  {m.self && m.recalledText && <button onClick={() => reEdit(m)} className="accent-txt ml-1.5 hover:underline">重新编辑</button>}
+                                </span>
+                              </div>
+                              )
+                            : ((m.type === 'file' || m.type === 'file-offer')
+                                ? <FileMsg m={m} progress={fileProgress[m.mid]} onAccept={acceptFile} onReject={rejectFile} selfAvatar={settings.avatar} peerAvatar={messageAvatar(m)} {...shared} />
+                                : <Bubble m={m} now={now} showName={isRoom && !m.self && ui === 0} markdown={!!settings.markdown} selectMode={selectMode} selected={!!selected[m.mid]} onToggleSelect={toggleSelect} selfAvatar={settings.avatar} peerAvatar={messageAvatar(m)} {...shared} />)}
+                      </div>
+                    )
+                  })}
+                </div>
+              )
+            })}
+          </div>
+          {dragOver && (
+            <div className="drop-overlay">
+              <Paperclip size={22} />
+              <span>松开鼠标，文件将加入发送栏</span>
+            </div>
+          )}
+          {!atBottom && (
+            <button onClick={jumpToBottom} className="jump-bottom" title="回到底部">
+              {newBelow > 0 ? `${newBelow} 条新消息` : '回到底部'} <ChevronDown size={14} />
+            </button>
+          )}
+          </div>
+
+          {chatNotice && (
+            <div className="flex justify-center px-4 pb-1 shrink-0">
+              <span className="text-[11.5px] px-3 py-1.5 rounded-full" style={{ background: 'var(--accent-tint)', color: 'var(--accent)' }}>{chatNotice}</span>
+            </div>
+          )}
+
+          <div className="composer-surface composer-box border-t bd-soft shrink-0 relative">
+            {emojiOpen && (
+              <div className="absolute left-3 bottom-[60px] glass-panel rounded-xl p-2 grid grid-cols-8 gap-1 z-10" style={{ maxWidth: 300 }}>
+                {EMOJIS.map((e) => <button key={e} onClick={() => { setText((t) => t + e); setEmojiOpen(false) }} className="text-lg rounded hover:bg-white/10">{e}</button>)}
+              </div>
+            )}
+            {/* 字体选择与聊天字号面板 */}
+            {fontOpen && (
+              <div ref={fontPanelRef} className="absolute left-3 bottom-[60px] rounded-xl p-2 z-10 w-44 shadow-xl" style={{ background: 'rgb(var(--panel-rgb))', border: '1px solid var(--border-hi)' }}>
+                <div className="space-y-0.5">
+                  {CHAT_FONTS.map((f) => (
+                    <button key={f.label} onClick={() => patchSettings({ chatFont: f.family })} style={{ fontFamily: f.family, background: settings.chatFont === f.family ? 'var(--accent-tint)' : 'transparent' }} className="w-full flex items-center gap-1 px-2 py-1.5 rounded-lg hover:bg-white/10 text-[13.5px] txt text-left">
+                      <span className="flex-1 truncate">{f.label}</span>
+                      {settings.chatFont === f.family && <Check size={13} className="accent-txt shrink-0" />}
+                    </button>
+                  ))}
+                </div>
+                <div className="mt-1.5 pt-2 px-1 border-t bd-soft">
+                  <input
+                    type="range" min={12} max={22} step={0.5} value={fontDraft} title="聊天字号"
+                    onChange={(e) => { const v = parseFloat(e.target.value); setFontDraft(v); setDisplay({ theme: settings.theme, fontPx: settings.fontPx, uiStyle: settings.uiStyle, chatFont: settings.chatFont, chatFontPx: v }) }}
+                    onMouseUp={(e) => patchSettings({ chatFontPx: parseFloat(e.currentTarget.value) })}
+                    onTouchEnd={(e) => patchSettings({ chatFontPx: parseFloat(e.currentTarget.value) })}
+                    className="w-full accent-indigo-500"
+                  />
+                </div>
+              </div>
+            )}
+            {mentionList.length > 0 && (
+              <div className="absolute left-3 bottom-[60px] glass-panel rounded-xl p-1 z-10 w-48">
+                {mentionList.map((p) => <button key={p.id} onClick={() => insertMention(p.name)} className="w-full text-left px-2 py-1 rounded hover:bg-white/10 text-sm txt flex items-center gap-2"><Avatar name={p.name} id={p.id} size={18} avatar={p.avatar} />{p.name}</button>)}
+              </div>
+            )}
+            {replyTo && (
+              <div className="flex items-center gap-2 mb-2 text-xs px-2 py-1 rounded-lg" style={{ background: 'var(--hover)' }}>
+                <span className="accent-txt shrink-0">回复</span>
+                <span className="txt-dim truncate flex-1">{replyTo.name}: {replyTo.text}</span>
+                <button onClick={() => setReplyTo(null)} className="txt-dim"><X size={12} /></button>
+              </div>
+            )}
+            {/* 待发送附件预览 */}
+            {pendingAtts.length > 0 && (
+              <div className="flex flex-wrap gap-2 mb-2">
+                {pendingAtts.map((a, i) => (
+                  <div key={a.path + i} className="flex items-center gap-1.5 rounded-lg px-1.5 py-1" style={{ background: 'var(--hover)', border: '1px solid var(--border-soft)' }}>
+                    {a.preview
+                      ? <img src={a.preview} alt="" className="w-10 h-10 object-cover rounded-md" />
+                      : <span className="w-7 h-7 rounded-md flex items-center justify-center shrink-0" style={{ background: 'var(--accent-tint)' }}><FileIcon size={13} className="accent-txt" /></span>}
+                    <span className="min-w-0">
+                      <span className="block text-[11px] txt max-w-[120px] truncate">{a.name}</span>
+                      {a.size > 0 && <span className="block text-[9.5px] txt-dim">{fmtSize(a.size)}</span>}
+                    </span>
+                    <button onClick={() => removePendingAtt(i)} title="移除" className="txt-dim hover:opacity-70 shrink-0"><X size={12} /></button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="composer-tools flex items-center gap-2 mb-2 text-xs">
+              <button ref={fontBtnRef} onClick={() => { setFontOpen((v) => !v); setEmojiOpen(false); setShotOpen(false) }} title="字体设置" className={'btn-ghost inline-flex items-center justify-center px-2.5 py-1 rounded-md text-[13.5px] font-semibold leading-none ' + (fontOpen ? 'accent-txt' : '')}>A</button>
+              {/* 截图按钮与选项 */}
+              <span className="relative">
+                <button ref={shotBtnRef} onClick={() => { setShotOpen((v) => !v); setEmojiOpen(false); setFontOpen(false) }} disabled={!canAttachActive} title="截图" className={'btn-ghost inline-flex items-center gap-1 px-2 py-1 rounded-md disabled:opacity-40 ' + (shotOpen ? 'accent-txt' : '')}><Camera size={14} /></button>
+                {shotOpen && (
+                  <div ref={shotPanelRef} className="absolute bottom-full left-0 z-20 mb-1.5 rounded-xl p-1.5 w-44 shadow-xl" style={{ background: 'rgb(var(--panel-rgb))', border: '1px solid var(--border-hi)' }}>
+                    <button onClick={() => takeShot('full')} className="side-item w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-left"><Monitor size={13} /> 截取屏幕</button>
+                    <button onClick={() => takeShot('hide')} className="side-item w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-left"><EyeOff size={13} /> 隐藏窗口截图</button>
+                  </div>
+                )}
+              </span>
+              <button onClick={() => { setEmojiOpen((v) => !v); setFontOpen(false); setShotOpen(false) }} className="btn-ghost inline-flex items-center gap-1 px-2 py-1 rounded-md"><Smile size={14} /></button>
+              <button onClick={attachFiles} disabled={!canAttachActive} title="发送文件" className="btn-ghost inline-flex items-center gap-1 px-2 py-1 rounded-md disabled:opacity-40"><Paperclip size={14} /></button>
+              <button onClick={() => { setSelectMode((v) => !v); setSelected({}) }} title="多选转发" className={'inline-flex items-center gap-1 px-2 py-1 rounded-md border transition ' + (selectMode ? 'border-emerald-500/50 accent-txt' : 'btn-ghost')}><Forward size={13} /></button>
+              {selectMode && <button onClick={() => setForwardOpen(true)} disabled={!Object.keys(selected).length} className="btn-primary text-xs rounded px-2 py-1 disabled:opacity-40">转发 {Object.keys(selected).length || ''}</button>}
+              {activePeer && (
+                <span className="relative" onMouseEnter={openNudgeHover} onMouseLeave={closeNudgeHover}>
+                  <button onClick={nudgeActive} disabled={!activePeer.online} title={activePeer.online ? '' : '对方离线'} className="btn-ghost inline-flex items-center gap-1 px-2 py-1 rounded-md disabled:opacity-40"><Hand size={14} /> 戳一戳</button>
+                  {/* 戳一戳自定义文字面板 */}
+                  {nudgeHover && (
+                    <div className="absolute bottom-full left-0 z-20 pb-1.5" onMouseEnter={openNudgeHover}>
+                      <div className="rounded-xl p-2 w-56 shadow-xl" style={{ background: 'rgb(var(--panel-rgb))', border: '1px solid var(--border-hi)' }}>
+                        <div className="text-[10px] txt-dim mb-1">自定义戳一戳附带文字</div>
+                        <input
+                          value={nudgeDraft}
+                          maxLength={20}
+                          onChange={(e) => setNudgeDraft(e.target.value.slice(0, 20))}
+                          onBlur={commitNudgeText}
+                          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitNudgeText() } }}
+                          placeholder="最多 20 个字符"
+                          className="field w-full rounded-lg px-2 py-1 text-xs"
+                        />
+                      </div>
+                    </div>
+                  )}
+                </span>
+              )}
+              <button onClick={() => setBurnOn((v) => !v)} title={'阅后即焚，' + burnTtl + ' 秒后删除'} className={'inline-flex items-center gap-1 px-2 py-1 rounded-full border transition ' + (burnOn ? 'burn-on' : 'btn-ghost')}><Flame size={13} /> 即焚 {burnOn ? '开' : '关'}</button>
+              <span className="ml-auto shrink-0 inline-flex items-center gap-2.5">
+                {activeDraft && <span className="txt-dim text-[10.5px]">草稿已保存</span>}
+                <span className="composer-hint">
+                  <kbd>{(settings.sendKey || 'enter') === 'ctrlEnter' ? 'Ctrl+Enter' : 'Enter'}</kbd> 发送
+                  <span className="opacity-50">·</span>
+                  <kbd>{(settings.sendKey || 'enter') === 'ctrlEnter' ? 'Enter' : 'Shift+Enter'}</kbd> 换行
+                </span>
+              </span>
+            </div>
+            <div className="composer-input-wrap flex items-end gap-2">
+              <textarea ref={composerRef} value={text} onChange={onTextChange} onKeyDown={onKeyDown} rows={1} placeholder={!active ? '请选择会话' : (!canSendActive ? (isRoom ? '暂无在线群成员，不能发送' : '对方离线，不能发送') : `发送给 ${convTitle(active)}...`)} className="field composer-input flex-1 resize-none rounded-lg px-3 py-2 text-sm max-h-32" />
+              <button onClick={handleSend} disabled={(!text.trim() && !pendingAtts.length) || !canSendActive} className="btn-primary composer-send inline-flex items-center gap-1 rounded-lg px-3 py-2 text-sm font-medium disabled:opacity-40"><Send size={15} />{pendingAtts.length > 0 ? ` 发送 ${pendingAtts.length} 个文件` : ' 发送'}</button>
+            </div>
+          </div>        </main>
+
+        {!standalone && <>
+          <div className="pane-resizer shrink-0" onMouseDown={startPaneDrag} title="拖拽调整宽度" />
+          <div className="detail-pane min-w-0 overflow-hidden flex" style={paneWidth ? { width: paneWidth } : undefined}>
+            <DetailPane
+              active={active}
+              activePeer={activePeer}
+              activeRoom={activeRoom}
+              roomMembers={roomMembers}
+              peers={peers}
+              self={self}
+              searchPane={searchPane}
+              convos={convos}
+              convTitle={convTitle}
+              locateMessage={locateMessage}
+              onOpenFile={(p) => api.file.open(p)}
+              onCloseSearch={() => setSearchPane(false)}
+              onMemberClick={(p) => { if (p.self) setShowProfile(true); else setProfilePeer(peerById(p.id) || p) }}
+              onAddMember={(ids) => addGroupMembers(activeRoom, ids)}
+              onKickMember={(p) => removeGroupMember(activeRoom, p)}
+              onOpenProfile={(p) => setProfilePeer(p)}
+            />
+          </div>
+        </>}
+      </div>
+
+      {historyOpen && active && (
+        <HistoryPanel
+          title={convTitle(active)}
+          messages={convos[active] || []}
+          selfName={self ? self.name : '?'}
+          selfAvatar={settings.avatar}
+          onLocate={(mid) => { setHistoryOpen(false); locateMessage(active, mid) }}
+          onOpenFile={(p) => api.file.open(p)}
+          onClose={() => setHistoryOpen(false)}
+        />
+      )}
+      {showSettings && <SettingsPanel settings={settings} onPatch={patchSettings} onClose={() => setShowSettings(false)} onLock={onLock} onReset={onReset} onClearHistory={clearAllHistory} onClearDrafts={clearAllDrafts} />}
+      {showProfile && self && <ProfileDialog person={{ ...self, avatar: settings.avatar }} editable onRename={renameSelf} onClose={() => setShowProfile(false)} />}
+      {profilePeer && <ProfileDialog person={profilePeer} onClose={() => setProfilePeer(null)} />}
+      {confirmAction && <ConfirmDialog title={confirmAction.title} text={confirmAction.text} confirmText={confirmAction.confirmText} onClose={() => { setConfirmAction(null); focusComposer() }} onConfirm={() => { const action = confirmAction; setConfirmAction(null); setTimeout(() => action.run(), 0) }} />}
+      {showCreateGroup && (
+        <Overlay onClose={() => setShowCreateGroup(false)}>
+          <div className="w-full max-w-md glass-panel rounded-2xl p-5">
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-semibold txt inline-flex items-center gap-2"><UserPlus size={16} /> 创建群聊</div>
+              <button onClick={() => setShowCreateGroup(false)} className="txt-dim hover:opacity-70"><X size={16} /></button>
+            </div>
+            <input autoFocus value={groupName} onChange={(e) => setGroupName(e.target.value.slice(0, 40))} placeholder="群聊名称" className="field mt-4 w-full rounded-lg px-3 py-2 text-sm" />
+            <div className="mt-4 text-xs txt-dim">选择成员（包含离线联系人）</div>
+            <div className="mt-2 max-h-72 overflow-auto space-y-1">
+              {sortedPeers.length === 0 && <div className="text-xs txt-dim rounded-lg px-3 py-4" style={{ background: 'var(--hover)' }}>暂无可选联系人</div>}
+              {sortedPeers.map((p) => (
+                <label key={p.id} className="flex items-center gap-2 rounded-lg px-2 py-2 hover:bg-white/5 cursor-pointer">
+                  <input type="checkbox" checked={!!groupMembers[p.id]} onChange={() => toggleGroupMember(p.id)} className="accent-emerald-500" />
+                  <Avatar name={p.name} id={p.id} size={24} dim={!p.online} avatar={p.avatar} />
+                  <span className="text-sm txt flex-1 min-w-0 truncate">{p.name}</span>
+                  <span className={'text-[11px] ' + (p.online ? 'accent-txt' : 'txt-dim')}>{p.online ? '在线' : '离线'}</span>
+                </label>
+              ))}
+            </div>
+            <div className="mt-4 flex items-center justify-between">
+              <span className="text-xs txt-dim">已选 {selectedMemberCount} 人</span>
+              <div className="flex gap-2">
+                <button onClick={() => setShowCreateGroup(false)} className="btn-ghost text-sm rounded-lg px-3 py-1.5">取消</button>
+                <button onClick={createGroup} disabled={!groupName.trim() || !selectedMemberCount} className="btn-primary text-sm rounded-lg px-3 py-1.5 disabled:opacity-40">创建</button>
+              </div>
+            </div>
+          </div>
+        </Overlay>
+      )}
+      {managedGroup && (
+        <Overlay onClose={() => setGroupManage(null)}>
+          <div className="w-full max-w-md glass-panel rounded-2xl p-5">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0 flex items-center gap-3">
+                <GroupAvatar group={managedGroup} size={44} />
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold txt truncate">{managedGroup.name}</div>
+                  <div className="text-xs txt-dim mt-0.5">{managedMembers.length} 位成员 · 群主 {((managedMembers.find((p) => p.id === managedGroup.ownerId) || {}).self ? '我' : ((managedMembers.find((p) => p.id === managedGroup.ownerId) || {}).name || convTitle(managedGroup.ownerId)))}</div>
+                  {managedGroup.ownerId === (self && self.id) && (
+                    <div className="mt-1.5 flex gap-2">
+                      <button onClick={() => changeGroupAvatar(managedGroup)} className="btn-ghost text-[11px] rounded-lg px-2 py-1 inline-flex items-center gap-1"><ImageIcon size={12} /> 更换群头像</button>
+                      {managedGroup.avatar && <button onClick={() => resetGroupAvatar(managedGroup)} className="btn-ghost text-[11px] rounded-lg px-2 py-1">恢复默认</button>}
+                    </div>
+                  )}
+                </div>
+              </div>
+              <button onClick={() => setGroupManage(null)} className="txt-dim hover:opacity-70 shrink-0"><X size={16} /></button>
+            </div>
+            <div className="mt-4 max-h-80 overflow-auto space-y-1">
+              {managedMembers.map((p) => {
+                const isOwner = managedGroup.ownerId === p.id
+                const canTransfer = managedGroup.ownerId === (self && self.id) && !isOwner
+                return (
+                  <div key={p.id} className="flex items-center gap-2 rounded-lg px-2 py-2" style={{ background: isOwner ? 'var(--hover)' : 'transparent' }}>
+                    <Avatar name={p.name} id={p.id} size={26} dim={!p.online} avatar={p.avatar} />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm txt truncate">{p.self ? '我' : p.name}{isOwner && <Crown size={12} className="inline ml-1 accent-txt" />}</div>
+                      <div className="text-[11px]" style={{ color: presenceOf(p).color }}>{presenceOf(p).label}</div>
+                    </div>
+                    {canTransfer && <button onClick={() => transferGroupOwner(managedGroup, p.id)} className="btn-ghost text-xs rounded-lg px-2 py-1">转让群主</button>}
+                    {managedGroup.ownerId === (self && self.id) && !isOwner && !p.self && <button onClick={() => removeGroupMember(managedGroup, p)} className="btn-ghost text-xs rounded-lg px-2 py-1 text-red-400">移出</button>}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </Overlay>
+      )}
+      {forwardOpen && (
+        <Overlay onClose={() => setForwardOpen(false)}>
+          <div className="w-80 glass-panel rounded-2xl p-4">
+            <div className="text-sm font-semibold txt mb-2">转发 {Object.keys(selected).length} 条消息</div>
+            <div className="seg-tabs grid grid-cols-2 gap-1 mb-1.5 text-xs">
+              <button onClick={() => setForwardMode('each')} className={forwardMode === 'each' ? 'seg-tab seg-tab-active' : 'seg-tab'}>逐条转发</button>
+              <button onClick={() => setForwardMode('merge')} className={forwardMode === 'merge' ? 'seg-tab seg-tab-active' : 'seg-tab'}>合并转发</button>
+            </div>
+            <div className="text-[10.5px] txt-dim mb-2">{forwardMode === 'each' ? '逐条发送到目标会话' : '合并为一条聊天记录发送'}</div>
+            {groups.length === 0 && peers.length === 0 && <div className="text-xs txt-dim px-2 py-3">暂无可转发会话</div>}
+            {groups.map((g) => <button key={g.id} onClick={() => doForward(g.id)} className="w-full text-left px-2 py-2 rounded-lg hover:bg-white/5 text-sm txt flex items-center gap-2"><GroupAvatar group={g} size={20} /> {g.name}</button>)}
+            {peers.map((p) => <button key={p.id} onClick={() => doForward(p.id)} className="w-full text-left px-2 py-2 rounded-lg hover:bg-white/5 text-sm txt flex items-center gap-2"><Avatar name={p.name} id={p.id} size={20} avatar={p.avatar} /> {p.name}</button>)}
+          </div>
+        </Overlay>
+      )}
+
+      {/* 会话右键菜单 */}
+      {sideMenu && (
+        <div className="fixed inset-0 z-50" onClick={() => setSideMenu(null)} onContextMenu={(e) => { e.preventDefault(); setSideMenu(null) }}>
+          <div
+            className="absolute glass-panel rounded-xl p-1.5 w-40 shadow-lg"
+            style={{ left: Math.max(8, Math.min(sideMenu.x, window.innerWidth - 172)), top: Math.max(8, Math.min(sideMenu.y, window.innerHeight - 180)) }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button onClick={() => { togglePin(sideMenu.item.id); setSideMenu(null) }} className="side-item w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm text-left"><Pin size={14} /> {isPinned(sideMenu.item.id) ? '取消置顶' : '置顶'}</button>
+            <button onClick={() => { toggleMute(sideMenu.item.id); setSideMenu(null) }} className="side-item w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm text-left">{isMuted(sideMenu.item.id) ? <Bell size={14} /> : <BellOff size={14} />} {isMuted(sideMenu.item.id) ? '取消免打扰' : '免打扰'}</button>
+            <button onClick={() => { setSideMenu(null); clearConv(sideMenu.item.id) }} className="side-item w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm text-left"><Trash2 size={14} /> 清空会话</button>
+            {sideMenu.item.kind === 'room' && (
+              <button onClick={() => { setSideMenu(null); leaveGroup(sideMenu.item.group) }} className="side-item w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm text-left text-red-400"><X size={14} /> 退出群聊</button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 消息右键菜单 */}
+      {ctxMenu && (
+        <div className="fixed inset-0 z-50" onClick={() => setCtxMenu(null)} onContextMenu={(e) => { e.preventDefault(); setCtxMenu(null) }}>
+          <div
+            className="absolute glass-panel rounded-xl p-1.5 w-44 shadow-lg"
+            style={{ left: Math.max(8, Math.min(ctxMenu.x, window.innerWidth - 192)), top: Math.max(8, Math.min(ctxMenu.y, window.innerHeight - 200)) }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex justify-between px-1.5 pb-1.5 mb-1 border-b bd-soft">
+              {REACTIONS.slice(0, 6).map((e) => (
+                <button key={e} onClick={() => { doReact(ctxMenu.m, e); setCtxMenu(null) }} className="text-base leading-none hover:scale-125 transition">{e}</button>
+              ))}
+            </div>
+            <button onClick={() => { doReply(ctxMenu.m); setCtxMenu(null) }} className="side-item w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm text-left"><Reply size={14} /> 回复</button>
+            {ctxMenu.m.text && (
+              <button onClick={() => { copyText(ctxMenu.m.text); setCtxMenu(null) }} className="side-item w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm text-left"><Copy size={14} /> 复制</button>
+            )}
+            {(ctxMenu.m.type === 'file') && ctxMenu.m.path && (
+              <button onClick={() => { api.file.open(ctxMenu.m.path); setCtxMenu(null) }} className="side-item w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm text-left"><FileIcon size={14} /> 打开文件</button>
+            )}
+            {ctxMenu.canRecall && (
+              <button onClick={() => { doRecall(ctxMenu.m); setCtxMenu(null) }} className="side-item w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm text-left text-red-400"><Undo2 size={14} /> 撤回</button>
+            )}
+          </div>
+        </div>
+      )}
+
+      <div className="fixed bottom-4 right-4 z-40 flex flex-col gap-2 items-end">
+        {toasts.map((t) => (
+          <button key={t.id} onClick={() => { selectConv(t.conv); setToasts((p) => p.filter((x) => x.id !== t.id)) }} className={'glass-panel rounded-xl px-3 py-2 text-left max-w-xs shadow-lg ' + (t.leaving ? 'toast-out' : 'toast-in')}>
+            <div className="text-xs font-medium txt truncate">{t.title}</div>
+            <div className="text-xs txt-dim truncate">{t.text}</div>
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+export default function App () {
+  const [authState, setAuthState] = useState('loading')
+  const [display, setDisplay] = useState({ theme: 'system', fontPx: 15, uiStyle: 'classic', chatFont: '', chatFontPx: 13.5 })
+  const params = new URLSearchParams(window.location.search)
+  const windowKind = params.get('window')
+  const standaloneConv = windowKind === 'chat' ? (params.get('conv') || '') : ''
+  const isShotWindow = windowKind === 'shot'
+
+  useEffect(() => {
+    // 登录/解锁页固定使用经典样式，进入主界面后才应用用户选择。
+    const effective = authState === 'unlocked' ? display : { ...display, uiStyle: 'classic' }
+    applyDisplay(effective)
+    const mq = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null
+    if (!mq) return
+    const onCh = () => applyDisplay(effective)
+    try { mq.addEventListener('change', onCh) } catch (_) { mq.addListener && mq.addListener(onCh) }
+    return () => { try { mq.removeEventListener('change', onCh) } catch (_) { mq.removeListener && mq.removeListener(onCh) } }
+  }, [display, authState])
+
+  useEffect(() => {
+    if (!api || !api.auth) { setAuthState('setup'); return }
+    api.auth.status().then((s) => setAuthState((s && s.state) || 'setup')).catch(() => setAuthState('setup'))
+  }, [])
+
+  if (isShotWindow) return <ShotScreen />
+
+  let screen
+  if (authState === 'loading') screen = <div className="auth-surface h-full flex flex-col"><TopBar /><Center><div className="text-sm txt-dim">加载中...</div></Center></div>
+  else if (authState === 'setup') screen = <SetupScreen onDone={() => setAuthState('unlocked')} />
+  else if (authState === 'locked') screen = <UnlockScreen onDone={() => setAuthState('unlocked')} onReset={() => setAuthState('setup')} />
+  else screen = <ChatScreen onLock={() => setAuthState('locked')} onReset={() => setAuthState('setup')} setDisplay={setDisplay} standaloneConv={standaloneConv} />
+
+  return <div className="app-bg txt h-full"><div className="app-shell">{screen}</div></div>
+}

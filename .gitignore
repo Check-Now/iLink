@@ -1,0 +1,19 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+dist-electron/
+release/
+out/
+
+# app runtime data (绿色版本地数据,不入库)
+data/
+data-2/
+
+# logs & misc
+*.log
+npm-debug.log*
+.vite/
+.DS_Store
+Thumbs.db
