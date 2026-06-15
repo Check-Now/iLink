@@ -1,16 +1,20 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Users, User, Send, Pencil, Check, ShieldCheck, Lock, Settings, X, Flame, EyeOff, Minus, Plus, Sun, Monitor, Info, Search, Smile, Paperclip, File as FileIcon, Reply, Undo2, Forward, Pin, Bell, BellOff, Trash2, Hand, Upload, Image as ImageIcon, Type, RefreshCw, CircleHelp, Network, UserPlus, Crown, ChevronDown, Copy, Camera, History } from 'lucide-react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Users, User, Send, Pencil, Check, ShieldCheck, Lock, Settings, X, Flame, EyeOff, Minus, Plus, Sun, Monitor, Info, Search, Smile, Paperclip, File as FileIcon, Reply, Undo2, Forward, Pin, Bell, BellOff, Trash2, Hand, Upload, Image as ImageIcon, Type, RefreshCw, CircleHelp, Network, UserPlus, Crown, ChevronDown, Copy, Camera, History, CheckCheck, Clock, AlertCircle } from 'lucide-react'
 
 const api = window.api
 const FIELD = 'field w-full rounded-lg px-3 py-2 text-sm outline-none'
 const EMOJIS = ['\u{1F604}', '\u{1F602}', '\u{1F60A}', '\u{1F60D}', '\u{1F60E}', '\u{1F914}', '\u{1F44D}', '\u{1F64F}', '\u{1F389}', '\u2764\uFE0F', '\u{1F525}', '\u{1F629}', '\u{1F628}', '\u{1F62D}', '\u{1F44F}', '\u{1F64C}', '\u{1F4AA}', '\u2728', '\u{1F680}', '\u{1F31F}', '\u{1F614}', '\u{1F917}', '\u{1F440}', '\u{1F4B4}', '\u{1F923}', '\u{1F604}', '\u{1F626}', '\u{1F61D}', '\u{1F92C}', '\u{1F62D}', '\u{1F44B}', '\u2705', '\u2764', '\u26A0\uFE0F', '\u{1F4AC}', '\u{1F4F8}', '\u{1F352}', '\u2600\uFE0F', '\u{1F431}', '\u{1F31B}']
 const AVATAR_PRESETS = ['#34c759', '#007aff', '#ff9500', '#ff2d55', '#af52de', '#5ac8fa', '#5856d6', '#8e8e93']
+// GIF 头像可动态同步的上限：base64 dataUrl ≤ 32KB（约 24KB 文件），与 UDP 广播包预算一致；超过则转静态
+const ANIMATED_GIF_MAX_CHARS = 32 * 1024
+const ANIMATED_GIF_MAX_KB = 24
 const MSG_PAGE = 60 // 消息懒加载：每页渲染数量
 // 个人状态：绿色在线 / 红色忙碌 / 灰色离开
 const PRESENCE = [
   { key: 'online', label: '在线', color: '#30d158' },
   { key: 'busy', label: '忙碌', color: '#ff453a' },
   { key: 'away', label: '离开', color: '#8e8e93' },
+  { key: 'dnd', label: '免打扰', color: '#bf5af2' }, // 全局免打扰：禁止一切消息通知
 ]
 // 取联系人/成员的展示状态：离线灰色，在线时按对方广播的 presence 显示
 function presenceOf (p) {
@@ -40,9 +44,39 @@ function avatarImageStyle (avatar) {
   const y = Math.max(0, Math.min(100, avatar && avatar.y != null ? avatar.y : 50))
   return { backgroundImage: `url("${avatar.imageDataUrl}")`, backgroundSize: zoom + '%', backgroundPosition: x + '% ' + y + '%' }
 }
+// 动图静态展示：开启后 GIF 取首帧渲染（设置项 staticGif，由 ChatScreen 每次渲染同步）
+let STATIC_GIF = false
+const gifStaticCache = new Map() // gif dataUrl -> 首帧静态 dataUrl
+function useStaticGifSrc (src) {
+  const [, force] = useState(0)
+  const freeze = STATIC_GIF && typeof src === 'string' && /^data:image\/gif/i.test(src)
+  useEffect(() => {
+    if (!freeze || gifStaticCache.has(src)) return
+    const img = new Image()
+    img.onload = () => {
+      try {
+        const c = document.createElement('canvas')
+        c.width = img.naturalWidth || img.width; c.height = img.naturalHeight || img.height
+        c.getContext('2d').drawImage(img, 0, 0)
+        gifStaticCache.set(src, c.toDataURL('image/png'))
+      } catch (_) { gifStaticCache.set(src, src) }
+      force((v) => v + 1)
+    }
+    img.onerror = () => { gifStaticCache.set(src, src); force((v) => v + 1) }
+    img.src = src
+  }, [src, freeze])
+  if (!freeze) return src
+  return gifStaticCache.get(src) || src
+}
+function StaticImg ({ src, ...rest }) {
+  const shown = useStaticGifSrc(src)
+  return <img src={shown} {...rest} />
+}
+
 function Avatar ({ name, id, size = 30, dim, avatar }) {
+  const imgSrc = useStaticGifSrc(avatar && avatar.type === 'image' ? avatar.imageDataUrl : null)
   if (avatar && avatar.type === 'image' && avatar.imageDataUrl) {
-    return <div className="avatar bg-center bg-no-repeat" style={{ width: size, height: size, opacity: dim ? 0.5 : 1, ...avatarImageStyle(avatar) }} />
+    return <div className="avatar bg-center bg-no-repeat" style={{ width: size, height: size, opacity: dim ? 0.5 : 1, ...avatarImageStyle({ ...avatar, imageDataUrl: imgSrc }) }} />
   }
   const ch = (name || '?').trim().slice(0, 1).toUpperCase() || '?'
   const text = avatar && avatar.type === 'text' && avatar.text ? avatar.text.trim().slice(0, 2).toUpperCase() : ch
@@ -220,8 +254,17 @@ function fmtSize (n) {
   while (v >= 1024 && i < u.length - 1) { v /= 1024; i++ }
   return v.toFixed(i ? 1 : 0) + ' ' + u[i]
 }
+// 传输速度与剩余时间展示
+function fmtSpeed (bps) { return (!bps || bps < 1) ? '' : fmtSize(bps) + '/s' }
+function fmtEta (sec) {
+  if (sec == null || !isFinite(sec) || sec < 0) return ''
+  if (sec < 1) return '即将完成'
+  if (sec < 60) return '剩余 ' + Math.ceil(sec) + ' 秒'
+  if (sec < 3600) return '剩余 ' + Math.ceil(sec / 60) + ' 分钟'
+  return '剩余 ' + Math.ceil(sec / 3600) + ' 小时'
+}
 
-function FileMsg ({ m, progress, onAccept, onReject, selfAvatar, peerAvatar, avatarSpacer, hideMeta, metaReactions }) {
+function FileMsg ({ m, progress, onAccept, onReject, onCancel, onRetry, selfAvatar, peerAvatar, avatarSpacer, hideMeta, metaReactions }) {
   const isImg = m.mime && m.mime.indexOf('image/') === 0
   const offer = m.type === 'file-offer'
   const pct = progress && progress.size ? Math.min(100, Math.round((progress.received / progress.size) * 100)) : null
@@ -237,7 +280,7 @@ function FileMsg ({ m, progress, onAccept, onReject, selfAvatar, peerAvatar, ava
         <div className={'rounded-2xl px-3 py-2 text-sm ' + (m.self ? 'bubble-self' : 'bubble-other')}>
         {(m.scope === 'group' || m.scope === 'room') && !m.self && m.name && <div className="text-[11px] font-medium accent-txt mb-0.5">{m.name}</div>}
         {isImg && m.dataUrl ? (
-          <img src={m.dataUrl} alt={m.fname} onClick={() => m.path && api.file.open(m.path)} className="rounded-lg max-w-[240px] max-h-60 object-contain cursor-pointer" />
+          <StaticImg src={m.dataUrl} alt={m.fname} onClick={() => !m.sticker && m.path && api.file.open(m.path)} className={'rounded-lg max-w-[240px] max-h-60 object-contain' + (m.sticker ? '' : ' cursor-pointer')} />
         ) : (
           <div className="flex items-center gap-2">
             <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: 'rgba(0,0,0,0.18)' }}><FileIcon size={18} /></div>
@@ -245,8 +288,12 @@ function FileMsg ({ m, progress, onAccept, onReject, selfAvatar, peerAvatar, ava
           </div>
         )}
         {pct != null && pct < 100 && <div className="mt-1 h-1 rounded bg-black/20 overflow-hidden"><div className="h-full bg-white/70" style={{ width: pct + '%' }} /></div>}
+        {pct != null && pct < 100 && progress && progress.speed > 0 && <div className="mt-0.5 text-[10px] opacity-70">{fmtSpeed(progress.speed)}{progress.eta != null ? ' · ' + fmtEta(progress.eta) : ''}</div>}
+        {m.self && m.scope === 'private' && pct != null && pct < 100 && onCancel && <button onClick={() => onCancel(m.mid)} className="mt-1 block text-[11px] opacity-80 hover:underline">取消</button>}
+        {m.self && m.scope === 'private' && m.status === 'failed' && <button onClick={() => onRetry && onRetry(m)} className="mt-1 block text-[11px] text-red-300 hover:underline">发送失败 · 重试</button>}
+        {m.self && m.scope === 'private' && m.status === 'queued' && pct == null && <div className="mt-1 text-[10px]" style={{ color: '#f59e0b' }}>待发送 · 对方上线后自动发送</div>}
         {offer && <div className="mt-2 flex gap-2"><button onClick={() => onAccept(m.mid)} className="btn-primary text-xs rounded px-2 py-1">接收</button><button onClick={() => onReject(m.mid)} className="btn-ghost text-xs rounded px-2 py-1">拒绝</button></div>}
-          {!offer && m.path && <div className="mt-1 flex gap-3 text-[11px] opacity-70"><button onClick={() => api.file.open(m.path)} className="hover:underline">打开</button><button onClick={() => api.file.showInFolder(m.path)} className="hover:underline">打开所在文件夹</button></div>}
+          {!offer && m.path && !m.sticker && <div className="mt-1 flex gap-3 text-[11px] opacity-70"><button onClick={() => api.file.open(m.path)} className="hover:underline">打开</button><button onClick={() => api.file.showInFolder(m.path)} className="hover:underline">打开所在文件夹</button></div>}
         </div>
         {!hideMeta && (
           <div className="message-meta">
@@ -379,7 +426,33 @@ function renderRich (text, markdown) {
   return out
 }
 
-function Bubble ({ m, now, showName, markdown, selectMode, selected, onToggleSelect, selfAvatar, peerAvatar, avatarSpacer, hideMeta, metaReactions }) {
+// 历史加载:把残留的“发送中”归一为“已发送”(重启后不应再卡在发送中)
+function normalizeHistory (h) {
+  for (const k of Object.keys(h || {})) {
+    const arr = h[k]
+    if (!Array.isArray(arr)) continue
+    for (const m of arr) { if (m && m.self && m.status === 'sending') m.status = 'sent' }
+  }
+  return h
+}
+
+// 私聊消息发送状态:发送中/已发送/已送达/失败(可重试)
+function MsgStatus ({ m, onRetry }) {
+  if (!m || !m.self || m.burn || !m.status) return null
+  const s = m.status
+  if (s === 'queued') return <Clock size={11} className="message-status" style={{ color: '#f59e0b' }} title="对方离线，已暂存，上线后自动发送" />
+  if (s === 'sending') return <Clock size={11} className="message-status txt-dim" title="发送中" />
+  if (s === 'sent') return <Check size={11} className="message-status txt-dim" title="已发送" />
+  if (s === 'delivered') return <CheckCheck size={11} className="message-status accent-txt" title="已送达" />
+  if (s === 'failed') return (
+    <button onClick={(e) => { e.stopPropagation(); onRetry && onRetry(m) }} className="message-status text-red-400 inline-flex items-center gap-0.5" title="发送失败，点击重试">
+      <AlertCircle size={11} /><RefreshCw size={10} />
+    </button>
+  )
+  return null
+}
+
+function Bubble ({ m, now, showName, markdown, selectMode, selected, onToggleSelect, selfAvatar, peerAvatar, avatarSpacer, hideMeta, metaReactions, onRetry }) {
   // 阅后即焚：剩余时间占比(0~1)，用于进度条展示
   const burnTotal = (m.ttl || 10) * 1000
   const burnFrac = m.burn ? Math.max(0, Math.min(1, (m.ts + burnTotal - now) / burnTotal)) : 0
@@ -407,6 +480,7 @@ function Bubble ({ m, now, showName, markdown, selectMode, selected, onToggleSel
             <div className="message-reactions">{Object.entries(rx).map(([e, ids]) => <span key={e} className="message-reaction">{e} {ids.length}</span>)}</div>
           )}
           <span className="message-time">{fmtTime(m.ts)}</span>
+          <MsgStatus m={m} onRetry={onRetry} />
         </div>
       )}
       </div>
@@ -415,31 +489,145 @@ function Bubble ({ m, now, showName, markdown, selectMode, selected, onToggleSel
   )
 }
 
-function ProfileDialog ({ person, editable, onRename, onClose }) {
+// 头像裁剪：直接在圆形预览里拖动图片选择显示区域，滚轮缩放
+function AvatarCropper ({ avatar, onChange, size = 132 }) {
+  const zoom = Math.max(100, Math.min(240, avatar.zoom || 120))
+  const x = avatar.x == null ? 50 : avatar.x
+  const y = avatar.y == null ? 50 : avatar.y
+  function startDrag (e) {
+    e.preventDefault()
+    const startX = e.clientX; const startY = e.clientY
+    const sx = x; const sy = y
+    const range = size * (zoom / 100 - 1) // 图片可移动的像素范围
+    const move = (ev) => {
+      if (range <= 0) return
+      const nx = Math.max(0, Math.min(100, sx - ((ev.clientX - startX) / range) * 100))
+      const ny = Math.max(0, Math.min(100, sy - ((ev.clientY - startY) / range) * 100))
+      onChange({ x: Math.round(nx), y: Math.round(ny) })
+    }
+    const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up) }
+    document.addEventListener('mousemove', move)
+    document.addEventListener('mouseup', up)
+  }
+  function onWheel (e) {
+    const next = Math.max(100, Math.min(240, zoom + (e.deltaY < 0 ? 10 : -10)))
+    if (next !== zoom) onChange({ zoom: next })
+  }
+  return (
+    <div className="flex flex-col items-center gap-1.5">
+      <div
+        onMouseDown={startDrag}
+        onWheel={onWheel}
+        title="拖动图片调整显示区域，滚轮缩放"
+        className="rounded-full cursor-move bg-no-repeat shrink-0"
+        style={{ width: size, height: size, border: '2px dashed var(--border-hi)', backgroundImage: `url("${avatar.imageDataUrl}")`, backgroundSize: zoom + '%', backgroundPosition: x + '% ' + y + '%' }}
+      />
+      <div className="text-[10px] txt-dim">拖动图片调整区域 · 滚轮缩放</div>
+    </div>
+  )
+}
+
+function ProfileDialog ({ person, editable, settings, onPatchSettings, onRename, onSetRemark, onClose }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(person.name || '')
+  const [sig, setSig] = useState((editable && settings && settings.statusText) || '')
+  const [remark, setRemark] = useState(person.remark || '')
+  const [avatarMsg, setAvatarMsg] = useState('')
+  function commitRemark () {
+    const v = remark.trim().slice(0, 32)
+    if (onSetRemark && v !== (person.remark || '')) onSetRemark(v)
+  }
+  const avatar = (editable && settings && settings.avatar) || person.avatar || { type: 'text', text: '', color: '' }
+  function patchAvatar (patch) { if (onPatchSettings) onPatchSettings({ avatar: { ...avatar, ...patch } }) }
+  async function pickAvatarImage () {
+    setAvatarMsg('')
+    if (!api.avatar || !api.avatar.pickImage) { setAvatarMsg('请重启窗口后再选择头像'); return }
+    const res = await api.avatar.pickImage()
+    if (res && res.ok) {
+      if (res.gif) {
+        const staticThumb = (await compressImageDataUrl(res.dataUrl, 192, 0.8)) || ''
+        if (res.dataUrl.length > ANIMATED_GIF_MAX_CHARS) {
+          // 超过可同步上限：提示过大，本地与对方都只用静态首帧，保证两端一致
+          setAvatarMsg('动图超过 ' + ANIMATED_GIF_MAX_KB + 'KB，已转为静态展示')
+          patchAvatar({ type: 'image', imageDataUrl: staticThumb || res.dataUrl, staticDataUrl: '', zoom: 120, x: 50, y: 50 })
+        } else {
+          patchAvatar({ type: 'image', imageDataUrl: res.dataUrl, staticDataUrl: staticThumb, zoom: 120, x: 50, y: 50 })
+        }
+      } else {
+        const compact = (await compressImageDataUrl(res.dataUrl, 192, 0.8)) || res.dataUrl
+        patchAvatar({ type: 'image', imageDataUrl: compact, staticDataUrl: '', zoom: 120, x: 50, y: 50 })
+      }
+    } else if (res && res.error) setAvatarMsg(res.error)
+  }
+  function commitSig () {
+    const v = sig.slice(0, 40)
+    if (onPatchSettings && v !== ((settings && settings.statusText) || '')) onPatchSettings({ statusText: v })
+  }
   async function save () { await onRename(draft); setEditing(false) }
   return (
     <Overlay onClose={onClose}>
-      <div className="w-72 glass-panel rounded-2xl p-6 text-center">
-        <div className="flex justify-center"><Avatar name={person.name} id={person.id} avatar={person.avatar} size={64} /></div>
+      <div className={(editable ? 'w-96' : 'w-72') + ' glass-panel rounded-2xl p-6 text-center'}>
+        {/* 头像：自己且为图片头像时显示拖拽裁剪，否则普通展示 */}
+        {editable && avatar.type === 'image' && avatar.imageDataUrl ? (
+          <div className="flex justify-center"><AvatarCropper avatar={avatar} onChange={patchAvatar} /></div>
+        ) : (
+          <div className="flex justify-center"><Avatar name={person.name} id={person.id} avatar={avatar} size={editable ? 96 : 64} /></div>
+        )}
+        {editable && (
+          <div className="mt-3 flex flex-wrap justify-center gap-2">
+            <button onClick={pickAvatarImage} className="btn-ghost text-xs rounded-lg px-2 py-1.5 inline-flex items-center gap-1"><Upload size={13} /> 上传图片</button>
+            <button onClick={() => patchAvatar({ type: 'text', imageDataUrl: '', text: avatar.text || '', color: avatar.color || AVATAR_PRESETS[0] })} className="btn-ghost text-xs rounded-lg px-2 py-1.5 inline-flex items-center gap-1"><Type size={13} /> 文字</button>
+            <button onClick={() => patchAvatar({ type: 'preset', imageDataUrl: '', color: avatar.color || AVATAR_PRESETS[1] })} className="btn-ghost text-xs rounded-lg px-2 py-1.5 inline-flex items-center gap-1"><ImageIcon size={13} /> 预设</button>
+          </div>
+        )}
+        {editable && avatarMsg && <div className="mt-2 text-xs text-red-400">{avatarMsg}</div>}
+        {editable && (avatar.type === 'text' || avatar.type === 'preset') && (
+          <div className="mt-3 space-y-2 text-left">
+            <Row label="头像文字" hint="最多 2 个字符"><input value={avatar.text || ''} maxLength={2} onChange={(e) => patchAvatar({ type: 'text', text: e.target.value })} className="field w-20 rounded px-2 py-1 text-sm" placeholder="?" /></Row>
+            <Row label="预设颜色"><div className="flex gap-1">{AVATAR_PRESETS.map((c) => <button key={c} onClick={() => patchAvatar({ type: avatar.type === 'preset' ? 'preset' : 'text', color: c })} className="w-6 h-6 rounded-full border" style={{ background: c, borderColor: avatar.color === c ? 'var(--text)' : 'transparent' }} />)}</div></Row>
+          </div>
+        )}
         {editable && editing ? (
           <div className="mt-3 flex items-center justify-center gap-1">
             <input value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') save() }} autoFocus className="field rounded-lg px-2 py-1 text-sm text-center w-40 outline-none" />
             <button onClick={save} className="accent-txt"><Check size={16} /></button>
           </div>
         ) : (
-          <div className="mt-3 text-lg font-semibold txt inline-flex items-center gap-1 justify-center">{person.name}{editable && <button onClick={() => { setDraft(person.name); setEditing(true) }} className="txt-dim hover:opacity-70"><Pencil size={13} /></button>}</div>
+          <div className="mt-3 text-lg font-semibold txt inline-flex items-center gap-1 justify-center">{person.remark || person.name}{editable && <button onClick={() => { setDraft(person.name); setEditing(true) }} className="txt-dim hover:opacity-70"><Pencil size={13} /></button>}</div>
         )}
+        {!editable && person.remark && <div className="mt-0.5 text-xs txt-dim">昵称: {person.name}</div>}
         {typeof person.online === 'boolean' && <div className="mt-1 text-xs txt-dim">{person.online ? '在线' : '离线'}</div>}
-        {person.status && <div className="mt-1 text-xs accent-txt break-words">{person.status}</div>}
-        <div className="mt-4 text-left text-xs txt-dim space-y-1.5">
-          <div>ID:<span className="txt font-mono ml-1">{(person.id || '').slice(0, 18)}...</span></div>
-          {person.address && <div>地址:<span className="txt ml-1">{person.address}</span></div>}
-          {person.localIp && <div>本机 IP:<span className="txt ml-1">{person.localIp}</span></div>}
-          {person.pub && <div>公钥:<span className="txt font-mono ml-1">{person.pub.slice(0, 20)}...</span></div>}
-          {typeof person.hasKey === 'boolean' && <div>加密会话:<span className="txt ml-1">{person.hasKey ? '已就绪' : '等待对方公钥'}</span></div>}
-        </div>
+        {/* 备注：仅本机可见 */}
+        {!editable && onSetRemark && (
+          <input
+            value={remark}
+            maxLength={32}
+            onChange={(e) => setRemark(e.target.value.slice(0, 32))}
+            onBlur={commitRemark}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitRemark() } }}
+            placeholder="设置备注（仅本机可见）"
+            className="field mt-2 w-full rounded-lg px-2 py-1 text-xs text-center"
+          />
+        )}
+        {/* 个性签名：自己可编辑，他人仅展示 */}
+        {editable ? (
+          <input
+            value={sig}
+            maxLength={40}
+            onChange={(e) => setSig(e.target.value.slice(0, 40))}
+            onBlur={commitSig}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitSig() } }}
+            placeholder="输入个性签名"
+            className="field mt-2 w-full rounded-lg px-2 py-1 text-xs text-center"
+          />
+        ) : (
+          person.status && <div className="mt-1 text-xs accent-txt break-words">{person.status}</div>
+        )}
+        {person.address && (
+          <div className="mt-4 text-left text-xs txt-dim space-y-1.5">
+            <div>地址:<span className="txt ml-1">{person.address}</span></div>
+          </div>
+        )}
         <button onClick={onClose} className="btn-ghost mt-5 w-full rounded-lg py-2 text-sm">关闭</button>
       </div>
     </Overlay>
@@ -508,7 +696,6 @@ function UnlockScreen ({ onDone, onReset }) {
 
 const SETTINGS_CATS = [
   { key: 'appearance', label: '外观', icon: Sun },
-  { key: 'profile', label: '个人资料', icon: User },
   { key: 'notify', label: '通知', icon: Bell },
   { key: 'files', label: '文件', icon: FileIcon },
   { key: 'network', label: '网络', icon: Network },
@@ -521,24 +708,12 @@ function SettingsPanel ({ settings, onPatch, onClose, onLock, onReset, onClearHi
   const [oldPw, setOldPw] = useState(''); const [newPw, setNewPw] = useState(''); const [newPw2, setNewPw2] = useState('')
   const [msg, setMsg] = useState(null); const [confirmReset, setConfirmReset] = useState(false); const [ack, setAck] = useState(false)
   const [appInfo, setAppInfo] = useState(null)
-  const [avatarMsg, setAvatarMsg] = useState('')
   const [updateMsg, setUpdateMsg] = useState('')
   const s = settings || {}
-  const avatar = s.avatar || { type: 'text', text: '', color: '' }
   const [udpDraft, setUdpDraft] = useState(String(s.udpPort || 51888))
   const [broadcastDraft, setBroadcastDraft] = useState(s.broadcastAddrs || '')
   useEffect(() => { setUdpDraft(String(s.udpPort || 51888)); setBroadcastDraft(s.broadcastAddrs || '') }, [s.udpPort, s.broadcastAddrs])
   useEffect(() => { if (api && api.ping) api.ping().then((p) => setAppInfo(p)).catch(() => {}) }, [])
-  function patchSettings (patch) { onPatch({ avatar: { ...avatar, ...patch } }) }
-  async function pickAvatarImage () {
-    setAvatarMsg('')
-    if (!api.avatar || !api.avatar.pickImage) { setAvatarMsg('请重启窗口后再选择头像'); return }
-    const res = await api.avatar.pickImage()
-    if (res && res.ok) {
-      const compact = (await compressImageDataUrl(res.dataUrl, 192, 0.8)) || res.dataUrl
-      patchSettings({ type: 'image', imageDataUrl: compact, zoom: 120, x: 50, y: 50 })
-    } else if (res && res.error) setAvatarMsg(res.error)
-  }
   function applyNetwork () {
     const port = Math.max(1024, Math.min(65535, parseInt(udpDraft, 10) || 51888))
     setUdpDraft(String(port))
@@ -578,6 +753,7 @@ function SettingsPanel ({ settings, onPatch, onClose, onLock, onReset, onClearHi
           <div className="flex-1 overflow-auto scroll p-5">
             {cat === 'appearance' && (
               <SettingsCard title="外观" icon={Sun}>
+                <Row label="动图静态展示" hint="开启后 GIF 等动图（头像、聊天图片）以静态画面显示"><Toggle on={!!s.staticGif} onClick={() => onPatch({ staticGif: !s.staticGif })} /></Row>
                 <Row label="字体大小"><select value={s.fontPx || 15} onChange={(e) => onPatch({ fontPx: parseInt(e.target.value, 10) })} className="field rounded px-2 py-1 text-sm"><option value={13}>Small</option><option value={15}>中号</option><option value={17}>Large</option></select></Row>
                 <div className="py-2">
                   <div className="text-sm txt">主题风格</div>
@@ -597,37 +773,6 @@ function SettingsPanel ({ settings, onPatch, onClose, onLock, onReset, onClearHi
               </SettingsCard>
             )}
 
-            {cat === 'profile' && (
-              <>
-                <SettingsCard title="头像" icon={ImageIcon}>
-                  <div className="mt-1 flex items-center gap-4">
-                    <Avatar name="?" id="me" avatar={avatar} size={72} />
-                    <div className="flex-1 min-w-0 space-y-2">
-                      <div className="flex flex-wrap gap-2">
-                        <button onClick={pickAvatarImage} className="btn-ghost text-xs rounded-lg px-2 py-1.5 inline-flex items-center gap-1"><Upload size={13} /> 上传</button>
-                        <button onClick={() => patchSettings({ type: 'text', imageDataUrl: '', text: avatar.text || '', color: avatar.color || AVATAR_PRESETS[0] })} className="btn-ghost text-xs rounded-lg px-2 py-1.5 inline-flex items-center gap-1"><Type size={13} /> 文字</button>
-                        <button onClick={() => patchSettings({ type: 'preset', imageDataUrl: '', color: avatar.color || AVATAR_PRESETS[1] })} className="btn-ghost text-xs rounded-lg px-2 py-1.5 inline-flex items-center gap-1"><ImageIcon size={13} /> 预设</button>
-                      </div>
-                      {avatarMsg && <div className="text-xs text-red-400">{avatarMsg}</div>}
-                    </div>
-                  </div>
-                  {(avatar.type === 'text' || avatar.type === 'preset') && (
-                    <div className="mt-3 space-y-2">
-                      <Row label="头像文字" hint="最多 2 个字符"><input value={avatar.text || ''} maxLength={2} onChange={(e) => patchSettings({ type: 'text', text: e.target.value })} className="field w-20 rounded px-2 py-1 text-sm" placeholder="?" /></Row>
-                      <Row label="预设颜色"><div className="flex gap-1">{AVATAR_PRESETS.map((c) => <button key={c} onClick={() => patchSettings({ type: avatar.type === 'preset' ? 'preset' : 'text', color: c })} className="w-6 h-6 rounded-full border" style={{ background: c, borderColor: avatar.color === c ? 'var(--text)' : 'transparent' }} />)}</div></Row>
-                    </div>
-                  )}
-                  {avatar.type === 'image' && avatar.imageDataUrl && (
-                    <div className="mt-3 space-y-2">
-                      <Row label="缩放"><input type="range" min={100} max={240} value={avatar.zoom || 120} onChange={(e) => patchSettings({ zoom: parseInt(e.target.value, 10) })} className="w-36 accent-indigo-500" /></Row>
-                      <Row label="水平偏移"><input type="range" min={0} max={100} value={avatar.x == null ? 50 : avatar.x} onChange={(e) => patchSettings({ x: parseInt(e.target.value, 10) })} className="w-36 accent-indigo-500" /></Row>
-                      <Row label="垂直偏移"><input type="range" min={0} max={100} value={avatar.y == null ? 50 : avatar.y} onChange={(e) => patchSettings({ y: parseInt(e.target.value, 10) })} className="w-36 accent-indigo-500" /></Row>
-                    </div>
-                  )}
-                </SettingsCard>
-              </>
-            )}
-
             {cat === 'notify' && (
               <SettingsCard title="通知与输入" icon={Bell}>
                 <Row label="通知"><Toggle on={s.notifyEnabled !== false} onClick={() => onPatch({ notifyEnabled: !(s.notifyEnabled !== false) })} /></Row>
@@ -645,6 +790,7 @@ function SettingsPanel ({ settings, onPatch, onClose, onLock, onReset, onClearHi
               <SettingsCard title="文件" icon={FileIcon}>
                 <Row label="接收方式"><select value={s.receiveMode || 'auto'} onChange={(e) => onPatch({ receiveMode: e.target.value })} className="field rounded px-2 py-1 text-sm"><option value="auto">自动</option><option value="manual">手动</option></select></Row>
                 <Row label="下载位置" hint={s.downloadDir || '未设置'}><button onClick={async () => { const d = await api.file.chooseDir(); if (d) onPatch({ downloadDir: d }) }} className="btn-ghost text-sm rounded-lg px-3 py-1.5">选择...</button></Row>
+                <Row label="单文件大小上限" hint="0 = 不限制（MB）"><input type="number" min={0} max={102400} value={s.maxFileMB || 0} onChange={(e) => onPatch({ maxFileMB: Math.max(0, parseInt(e.target.value, 10) || 0) })} className="field w-24 rounded px-2 py-1 text-sm" /></Row>
               </SettingsCard>
             )}
 
@@ -703,10 +849,12 @@ function SettingsPanel ({ settings, onPatch, onClose, onLock, onReset, onClearHi
                 <div className="rounded-lg p-3 text-xs txt-dim" style={{ background: 'var(--bubble-other)' }}>
                   <div className="txt font-medium">iLink {appInfo ? appInfo.appVersion : ''}</div>
                   <div className="mt-1">P2P 局域网点对点通讯，数据默认存放在本地 data 目录。</div>
+                  <div className="mt-1">作者：<span className="txt">Claude x WZT</span></div>
                    {appInfo && <div className="mt-1 font-mono">Electron {appInfo.versions.electron} · Node {appInfo.versions.node}</div>}
                 </div>
                 <div className="mt-2 flex flex-wrap gap-2">
                    <button onClick={checkUpdate} className="btn-ghost text-sm rounded-lg px-3 py-1.5 inline-flex items-center gap-1"><RefreshCw size={13} /> 检查更新</button>
+                   {api.sys.revealLog && <button onClick={() => api.sys.revealLog()} className="btn-ghost text-sm rounded-lg px-3 py-1.5 inline-flex items-center gap-1"><FileIcon size={13} /> 打开日志</button>}
                    <button onClick={() => setUpdateMsg('帮助：两端需要使用相同 UDP 端口，并检查防火墙和广播地址。')} className="btn-ghost text-sm rounded-lg px-3 py-1.5 inline-flex items-center gap-1"><CircleHelp size={13} /> 帮助</button>
                    <button onClick={() => setUpdateMsg('关于：iLink 使用 UDP 发现、端到端加密消息和本地加密存储。')} className="btn-ghost text-sm rounded-lg px-3 py-1.5 inline-flex items-center gap-1"><Info size={13} /> 关于</button>
                 </div>
@@ -721,18 +869,44 @@ function SettingsPanel ({ settings, onPatch, onClose, onLock, onReset, onClearHi
 }
 
 // 群成员列表：显示人数，群主第一，其余按在线 > 离线 > 名字排序
+const PICKER_PAGE = 50 // 添加成员候选列表分页大小：大量用户时增量渲染，避免一次挂载全部节点
 function GroupMemberList ({ room, members, peers, selfId, onMemberClick, onAddMember, onKickMember }) {
   const [adding, setAdding] = useState(false)
   const [query, setQuery] = useState('')
+  const [picked, setPicked] = useState({}) // 多选：id -> true
+  const [showCount, setShowCount] = useState(PICKER_PAGE)
   const onlineCount = members.filter((p) => p.online).length
   const memberIds = new Set(members.map((p) => p.id))
   const isMember = !!selfId && memberIds.has(selfId)
   const canKick = !!selfId && room.ownerId === selfId
   const needle = query.trim().toLowerCase()
-  const candidates = (peers || [])
-    .filter((p) => p && p.id && !memberIds.has(p.id))
-    .filter((p) => !needle || (p.name || '').toLowerCase().includes(needle) || String(p.id).toLowerCase().includes(needle) || (p.email || '').toLowerCase().includes(needle))
-    .slice(0, 12)
+  // 展示全部非成员用户（在线 + 离线联系人），排序：在线 > 离线 > 名字；useMemo 避免每次渲染重排
+  const candidates = useMemo(() => {
+    const ids = new Set(members.map((p) => p.id))
+    const list = []
+    for (const p of (peers || [])) {
+      if (!p || !p.id || ids.has(p.id)) continue
+      if (needle) {
+        const hit = (p.remark || '').toLowerCase().includes(needle) || (p.name || '').toLowerCase().includes(needle) || String(p.id).toLowerCase().includes(needle)
+        if (!hit) continue
+      }
+      list.push(p)
+    }
+    list.sort((a, b) => ((a.online ? 0 : 1) - (b.online ? 0 : 1)) || (a.remark || a.name || '').localeCompare(b.remark || b.name || '', 'zh-CN'))
+    return list
+  }, [peers, members, needle])
+  useEffect(() => { setShowCount(PICKER_PAGE) }, [needle, adding]) // 搜索词或开关变化时回到第一页
+  const visibleCandidates = candidates.slice(0, showCount)
+  const pickedIds = Object.keys(picked).filter((id) => picked[id])
+  function onPickerScroll (e) {
+    const el = e.currentTarget
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 40 && showCount < candidates.length) setShowCount((c) => c + PICKER_PAGE)
+  }
+  function confirmAdd () {
+    if (!pickedIds.length) return
+    onAddMember && onAddMember(pickedIds)
+    setPicked({}); setQuery(''); setAdding(false)
+  }
   const sorted = members.slice().sort((a, b) => {
     const ao = a.id === room.ownerId ? 0 : 1
     const bo = b.id === room.ownerId ? 0 : 1
@@ -759,22 +933,28 @@ function GroupMemberList ({ room, members, peers, selfId, onMemberClick, onAddMe
             <div className="mt-2 space-y-1">
               <div className="side-search">
                 <Search size={12} className="txt-dim shrink-0" />
-                <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="用户名/ID/邮箱" />
+                <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索用户名/备注/ID" />
               </div>
-              <div className="max-h-44 overflow-auto scroll space-y-0.5">
-                {candidates.map((p) => (
-                  <div key={p.id} className="side-item flex items-center gap-2 px-2 py-1.5 rounded-lg">
-                    <Avatar name={p.name} id={p.id} size={24} dim={!p.online} avatar={p.avatar} />
-                    <div className="flex-1 min-w-0">
-                      <div className="text-xs txt truncate">{p.name}</div>
-                      <div className="text-[10px] txt-dim truncate">{p.id}</div>
+              <div className="text-[10px] txt-dim px-1">可添加 {candidates.length} 人{pickedIds.length > 0 ? ` · 已选 ${pickedIds.length}` : ''}</div>
+              <div className="max-h-56 overflow-auto scroll space-y-0.5" onScroll={onPickerScroll}>
+                {visibleCandidates.map((p) => {
+                  const sel = !!picked[p.id]
+                  return (
+                    <div key={p.id} onClick={() => setPicked((prev) => ({ ...prev, [p.id]: !prev[p.id] }))} className={'side-item flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer ' + (sel ? 'side-item-active' : '')}>
+                      <Avatar name={p.remark || p.name} id={p.id} size={24} dim={!p.online} avatar={p.avatar} />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs txt truncate">{p.remark || p.name}</div>
+                        <div className="text-[10px] truncate" style={{ color: p.online ? presenceOf(p).color : 'var(--text-dim)' }}>{p.online ? presenceOf(p).label : '离线'}</div>
+                      </div>
+                      <span className={'w-4 h-4 rounded-full shrink-0 flex items-center justify-center ' + (sel ? 'btn-primary' : '')} style={sel ? {} : { border: '1.5px solid var(--border-hi)' }}>{sel && <Check size={11} />}</span>
                     </div>
-                    <button onClick={() => onAddMember && onAddMember([p.id])} className="btn-primary text-[11px] rounded-md px-2 py-1">添加</button>
-                  </div>
-                ))}
+                  )
+                })}
+                {showCount < candidates.length && <div className="text-[10px] txt-dim text-center py-1.5">向下滚动加载更多</div>}
                 {query.trim() && candidates.length === 0 && <div className="text-[11px] txt-dim px-2 py-2">未找到匹配的成员</div>}
                 {!query.trim() && candidates.length === 0 && <div className="text-[11px] txt-dim px-2 py-2">暂无可添加成员</div>}
               </div>
+              {pickedIds.length > 0 && <button onClick={confirmAdd} className="btn-primary w-full rounded-lg px-2 py-1.5 text-xs font-medium">添加 {pickedIds.length} 人</button>}
             </div>
           )}
         </div>
@@ -1070,7 +1250,7 @@ function HistoryPanel ({ title, messages, selfName, selfAvatar, onLocate, onOpen
                     </span>
 
                     {isImg && m.dataUrl ? (
-                      <img src={m.dataUrl} alt={m.fname} className="mt-1 w-14 h-14 object-cover rounded-lg" style={{ border: '1px solid var(--border-soft)' }} />
+                      <StaticImg src={m.dataUrl} alt={m.fname} className="mt-1 w-14 h-14 object-cover rounded-lg" style={{ border: '1px solid var(--border-soft)' }} />
                     ) : isFile ? (
                       <span className="mt-1 inline-flex items-center gap-2 rounded-lg px-2 py-1.5" style={{ background: 'var(--hover)', border: '1px solid var(--border-soft)' }}>
                         <span className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ background: 'var(--accent-tint)' }}>
@@ -1164,7 +1344,10 @@ function ShotScreen () {
   }
 
   function onUp () {
-    if (mode === 'rect' && draftRect && draftRect.w > 3 && draftRect.h > 3) {
+    if (mode === 'select') {
+      // 选区完成后自动进入文字模式：在选区内单击即聚焦输入
+      if (rect && rect.w > 3 && rect.h > 3) setMode('text')
+    } else if (mode === 'rect' && draftRect && draftRect.w > 3 && draftRect.h > 3) {
       setAnnos((prev) => [...prev, { type: 'rect', ...draftRect, color, width: lineW }])
     }
     setDraftRect(null)
@@ -1210,9 +1393,8 @@ function ShotScreen () {
     if (textEdit) commitTextEdit()
     const dataUrl = await cropAndExport()
     if (!dataUrl) { api.shot.cancel(); return }
-    if (kind === 'copy') api.shot.copy(dataUrl)
-    else if (kind === 'save') api.shot.save(dataUrl)
-    else api.shot.done(dataUrl)
+    if (kind === 'save') api.shot.save(dataUrl)
+    else api.shot.done(dataUrl) // 完成：写入发送框并复制到剪贴板（主进程处理）
   }
 
   const showToolbar = rect && !dragging && rect.w > 3 && rect.h > 3
@@ -1230,18 +1412,9 @@ function ShotScreen () {
   return (
     <div onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} style={{ position: 'fixed', inset: 0, cursor: mode === 'text' ? 'text' : 'crosshair', userSelect: 'none', background: '#000', overflow: 'hidden' }}>
       {img && <img src={img} alt="" draggable={false} style={{ position: 'absolute', inset: 0, width: '100vw', height: '100vh' }} />}
-      {!rect && <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.35)' }} />}
-      {!rect && (
-        <div style={{ position: 'absolute', top: 24, left: '50%', transform: 'translateX(-50%)', background: 'rgba(0,0,0,0.7)', color: '#fff', fontSize: 13, padding: '8px 16px', borderRadius: 999 }}>
-          拖拽框选截图区域，Esc 取消
-        </div>
-      )}
+      {/* 选区只保留框线：去除遮罩背景、尺寸标签与提示横幅 */}
       {rect && (
-        <div style={{ position: 'absolute', left: rect.x, top: rect.y, width: rect.w, height: rect.h, border: '1.5px solid #4f8cff', boxShadow: '0 0 0 100000px rgba(0,0,0,0.45)', pointerEvents: 'none' }}>
-          <span style={{ position: 'absolute', top: -24, left: 0, fontSize: 11, color: '#fff', background: 'rgba(0,0,0,0.6)', padding: '2px 6px', borderRadius: 6 }}>
-            {Math.round(rect.w)} × {Math.round(rect.h)}
-          </span>
-        </div>
+        <div style={{ position: 'absolute', left: rect.x, top: rect.y, width: rect.w, height: rect.h, border: '1.5px solid #4f8cff', pointerEvents: 'none' }} />
       )}
       {annos.map((a, i) => a.type === 'rect'
         ? <div key={i} style={{ position: 'absolute', left: a.x, top: a.y, width: a.w, height: a.h, border: a.width + 'px solid ' + a.color, borderRadius: 2, pointerEvents: 'none' }} />
@@ -1261,7 +1434,6 @@ function ShotScreen () {
       {showToolbar && (
         <div onMouseDown={(e) => e.stopPropagation()} style={{ position: 'absolute', ...toolbarStyle, display: 'flex', flexDirection: 'column', gap: 6, background: 'rgba(28,28,32,0.95)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: 10, padding: 7 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <button onClick={() => { if (textEdit) commitTextEdit(); setMode('select') }} style={toolBtn(mode === 'select')} title="重新选择区域">选择</button>
             <button onClick={() => { if (textEdit) commitTextEdit(); setMode('rect') }} style={toolBtn(mode === 'rect')} title="绘制矩形标注">矩形</button>
             <button onClick={() => setMode('text')} style={toolBtn(mode === 'text')} title="输入文字标注">文本</button>
             <span style={{ width: 1, height: 18, background: 'rgba(255,255,255,0.2)' }} />
@@ -1275,7 +1447,7 @@ function ShotScreen () {
             {annos.length > 0 && <button onClick={() => setAnnos((p) => p.slice(0, -1))} style={toolBtn(false)} title="撤销上一项">撤销</button>}
           </div>
           <div style={{ display: 'flex', gap: 6 }}>
-            {[{ k: 'copy', label: '复制' }, { k: 'save', label: '保存' }, { k: 'cancel', label: '取消' }, { k: 'send', label: '发送' }].map((b) => (
+            {[{ k: 'save', label: '保存' }, { k: 'cancel', label: '取消' }, { k: 'send', label: '发送' }].map((b) => (
               <button
                 key={b.k}
                 onClick={() => (b.k === 'cancel' ? api.shot.cancel() : act(b.k))}
@@ -1297,7 +1469,7 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
   const [peers, setPeers] = useState([])
   const [active, setActive] = useState(standaloneConv === 'group' ? '' : (standaloneConv || ''))
   const [convos, setConvos] = useState({})
-  const [unread, setUnread] = useState({})
+  const [reads, setReads] = useState({}) // 各会话已读位(ts)；未读数由 convos + reads 派生
   const [nameById, setNameById] = useState({})
   const [text, setText] = useState('')
   const [netError, setNetError] = useState(null)
@@ -1307,10 +1479,12 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
   const [searchPane, setSearchPane] = useState(false)
   const [flashMid, setFlashMid] = useState(null)
   const [presenceOpen, setPresenceOpen] = useState(false)
-  const [sigDraft, setSigDraft] = useState('')
   const [ctxMenu, setCtxMenu] = useState(null) // { x, y, m } 消息鍙抽敭鑿滃崟
   const [sideMenu, setSideMenu] = useState(null) // { x, y, item } 好友列表右键菜单
   const [emojiOpen, setEmojiOpen] = useState(false)
+  const [emojiTab, setEmojiTab] = useState('emoji') // emoji | sticker，与 emoji 同层级的表情包标签
+  const [stickers, setStickers] = useState([])
+  const stickersLoadedRef = useRef(false)
   const [fontOpen, setFontOpen] = useState(false)
   const [fontDraft, setFontDraft] = useState(13.5)
   const [paneWidth, setPaneWidth] = useState(0)
@@ -1359,6 +1533,18 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
     document.addEventListener('mousedown', onDown)
     return () => document.removeEventListener('mousedown', onDown)
   }, [shotOpen])
+  const emojiPanelRef = useRef(null)
+  const emojiBtnRef = useRef(null)
+  useEffect(() => {
+    if (!emojiOpen) return undefined
+    const onDown = (e) => {
+      if (emojiPanelRef.current && emojiPanelRef.current.contains(e.target)) return
+      if (emojiBtnRef.current && emojiBtnRef.current.contains(e.target)) return
+      setEmojiOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [emojiOpen])
   const [drafts, setDrafts] = useState({})
   const [shake, setShake] = useState(false)
   const [chatNotice, setChatNotice] = useState(null)
@@ -1372,7 +1558,8 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
   const [sideQuery, setSideQuery] = useState('') // 会话列表搜索，仅前端过滤展示
   const [atBottom, setAtBottom] = useState(true)
   const [newBelow, setNewBelow] = useState(0)
-  const [dragOver, setDragOver] = useState(false)
+  const [dragOver, setDragOver] = useState(false) // 拖到聊天区：直接发送
+  const [composerDragOver, setComposerDragOver] = useState(false) // 拖到发送框：暂存待发
   const atBottomRef = useRef(true)
 
   const scrollRef = useRef(null)
@@ -1381,7 +1568,9 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
   const settingsRef = useRef(settings); settingsRef.current = settings
   const mutedRef = useRef([]); mutedRef.current = settings.muted || []
   const nameByIdRef = useRef({}); nameByIdRef.current = nameById
+  const peersRef = useRef([]); peersRef.current = peers
   const convosRef = useRef({}); convosRef.current = convos
+  const statusBufRef = useRef({}) // mid -> status，消息尚未渲染时暂存其发送状态，pushMsg 时回填
   const lastActivityRef = useRef(Date.now())
   const lastTypingRef = useRef(0)
   const toastSeq = useRef(0)
@@ -1398,12 +1587,17 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
     if (!api || !api.p2p) { setNetError('preload 未注入'); return }
     api.p2p.getSelf().then((s) => { if (s) setSelf(s) })
     api.p2p.getPeers().then((list) => setPeers(list || []))
-    api.store.getHistory().then((h) => setConvos(h || {}))
+    Promise.all([api.store.getHistory(), api.store.getReads ? api.store.getReads() : Promise.resolve({})]).then(([h, r]) => {
+      setConvos(normalizeHistory(h || {}))
+      setReads(r || {}) // 未读数由 convos + reads 派生（见 unread useMemo）
+    })
     if (api.store.getGroups) api.store.getGroups().then((list) => setGroups(list || []))
     api.settings.get().then((s) => { if (s) { setSettings(s); setBurnOn(!!s.burnDefault); setBurnTtl(s.burnTtl || 10); setDisplay({ theme: s.theme, fontPx: s.fontPx, uiStyle: s.uiStyle, chatFont: s.chatFont, chatFontPx: s.chatFontPx }) } })
     if (api.store.getDrafts) api.store.getDrafts().then((d) => { const saved = d || {}; setDrafts(saved); if (saved[activeRef.current]) setText(saved[activeRef.current]) })
     const unsubs = [
-      api.p2p.onReady((s) => setSelf(s)),
+      // 主进程侧改设置（托盘切换免打扰等）同步到渲染层
+      api.settings.onChanged ? api.settings.onChanged((s) => { if (s) setSettings(s) }) : () => {},
+      api.p2p.onReady((s) => { setSelf(s); setNetError(null) }), // 重连成功(重新 ready)即清除网络提示
       api.p2p.onPeers((list) => { setPeers(list || []); if ((list || []).some((p) => p.online)) setNetError(null) }),
       api.p2p.onMessage((m) => handleIncoming(m)),
       api.p2p.onTyping((t) => setTypingPeers((prev) => {
@@ -1411,11 +1605,27 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
         return { ...prev, [conv]: { ...(prev[conv] || {}), [t.from]: Date.now() + 3500 } }
       })),
       api.p2p.onNetError((e) => setNetError(e)),
-      api.file.onProgress((p) => setFileProgress((prev) => ({ ...prev, [p.mid]: p }))),
-      api.file.onReceived(({ conv, msg }) => { pushMsg(conv, msg); setFileProgress((prev) => { const n = { ...prev }; delete n[msg.mid]; return n }); if (conv !== activeRef.current) setUnread((u) => ({ ...u, [conv]: (u[conv] || 0) + 1 })) }),
-      api.file.onOffer((info) => { if (info.scope === 'group') return; const conv = info.scope === 'room' ? info.to : info.from; pushMsg(conv, { ...info, type: 'file-offer', self: false, ts: Date.now() }); if (conv !== activeRef.current) setUnread((u) => ({ ...u, [conv]: (u[conv] || 0) + 1 })) }),
-      api.file.onSent(({ mid }) => setFileProgress((prev) => { const n = { ...prev }; delete n[mid]; return n })),
-      api.file.onFailed(({ mid }) => { setFileProgress((prev) => { const n = { ...prev }; delete n[mid]; return n }); showChatNotice('文件传输失败（对方不可达或已拒绝）') }),
+      api.file.onProgress((p) => setFileProgress((prev) => {
+        // 按 ≥0.25s 的窗口测速并指数平滑，据此估算剩余时间
+        const old = prev[p.mid] || {}
+        const now = Date.now()
+        let speed = old.speed || 0
+        let baseTs = old._ts || now
+        let baseRecv = old._received != null ? old._received : p.received
+        const dt = (now - baseTs) / 1000
+        if (dt >= 0.25 && p.received > baseRecv) {
+          const inst = (p.received - baseRecv) / dt
+          speed = old.speed ? old.speed * 0.5 + inst * 0.5 : inst
+          baseTs = now; baseRecv = p.received
+        }
+        const eta = speed > 0 && p.size ? Math.max(0, (p.size - p.received) / speed) : null
+        return { ...prev, [p.mid]: { mid: p.mid, received: p.received, size: p.size, dir: p.dir, speed, eta, _ts: baseTs, _received: baseRecv } }
+      })),
+      api.file.onReceived(({ conv, msg }) => { pushMsg(conv, msg); setFileProgress((prev) => { const n = { ...prev }; delete n[msg.mid]; return n }); if (conv === activeRef.current) bumpRead(conv, msg.ts || Date.now()) }),
+      api.file.onOffer((info) => { if (info.scope === 'group') return; const conv = info.scope === 'room' ? info.to : info.from; pushMsg(conv, { ...info, type: 'file-offer', self: false, ts: Date.now() }); if (conv === activeRef.current) bumpRead(conv, Date.now()) }),
+      api.file.onSent(({ mid }) => { setFileProgress((prev) => { const n = { ...prev }; delete n[mid]; return n }); setFileStatusByMid(mid, 'sent') }),
+      api.file.onFailed(({ mid, canceled, queued }) => { setFileProgress((prev) => { const n = { ...prev }; delete n[mid]; return n }); setFileStatusByMid(mid, queued ? 'queued' : 'failed'); if (!canceled && !queued) showChatNotice('文件传输失败（对方不可达或已拒绝）') }),
+      api.file.onRejected ? api.file.onRejected(({ files, limitMB }) => showChatNotice((files && files.length ? '「' + files.join('、') + '」' : '文件') + ' 超过 ' + limitMB + 'MB 上限，未发送')) : () => {},
       api.msg.onRecall(({ conv, mid }) => {
         // 对方撤回：除原位提示外，非当前会话或失焦时弹通知告知
         const target = (convosRef.current[conv] || []).find((x) => x.mid === mid)
@@ -1426,6 +1636,7 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
         setConvos((prev) => ({ ...prev, [conv]: (prev[conv] || []).map((x) => x.mid === mid ? { ...x, recalled: true, text: '' } : x) }))
       }),
       api.msg.onReaction(({ conv, mid, emoji, from }) => applyReaction(conv, mid, emoji, from)),
+      api.msg.onStatus ? api.msg.onStatus(({ mid, toId, status }) => updateMsgStatus(toId, mid, status)) : () => {},
       api.msg.onNudge(({ from, text }) => {
         if ((mutedRef.current || []).includes(from)) return
         setShake(true); setTimeout(() => setShake(false), 500)
@@ -1475,18 +1686,37 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
+  // 未读数派生自会话消息：他人发送、非系统/非撤回/非阅后即焚、且晚于已读位的条数
+  // （撤回的消息自动不计，且每条只数一次，避免计数器漂移导致的双倍/不减）
+  const unread = useMemo(() => {
+    const u = {}
+    for (const conv of Object.keys(convos)) {
+      const cut = reads[conv] || 0
+      let n = 0
+      const arr = convos[conv] || []
+      for (let i = 0; i < arr.length; i++) {
+        const m = arr[i]
+        if (m && !m.self && !m.system && !m.recalled && !m.burn && (m.ts || 0) > cut) n++
+      }
+      if (n > 0) u[conv] = n
+    }
+    return u
+  }, [convos, reads])
+
   useEffect(() => {
     const total = Object.values(unread).reduce((a, b) => a + (b || 0), 0)
     if (api && api.ui) api.ui.setUnread(total)
   }, [unread])
 
-  useEffect(() => { setNameById((prev) => { const n = { ...prev }; for (const p of peers) n[p.id] = p.name; return n }) }, [peers])
+  useEffect(() => { setNameById((prev) => { const n = { ...prev }; for (const p of peers) n[p.id] = p.remark || p.name; return n }) }, [peers]) // 备注优先（仅本机）
+  // 对方离线/无在线群成员 → 即焚不可用：自动关闭开关，避免发送时报错
   useEffect(() => {
-    if (active) return
-    const first = (groups[0] && groups[0].id) || (peers.find((p) => p.online) || {}).id
-    if (first) { setActive(first); setUnread((u) => ({ ...u, [first]: 0 })) }
+    if (!burnOn) return
+    const room = roomById(active)
+    const ok = room ? hasOnlineRoomRecipient(room) : !!(peerById(active) && peerById(active).online)
+    if (!ok) setBurnOn(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [peers, groups])
+  }, [active, peers, groups, burnOn])
   // 仅在末尾出现新消息或切换会话时滚到底部，表情回应/撤回等就地更新不滚动
   const lastBottomKeyRef = useRef('')
   useEffect(() => {
@@ -1528,7 +1758,21 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
   }, [active, text])
 
   function pushMsg (convId, msg) {
-    setConvos((prev) => { const list = prev[convId] || []; if (msg.mid && list.some((x) => x.mid === msg.mid)) return prev; return { ...prev, [convId]: [...list, msg] } })
+    // 状态事件可能先于消息渲染到达，这里回填缓存的发送状态
+    const buffered = msg.mid ? statusBufRef.current[msg.mid] : null
+    if (buffered) { msg = { ...msg, status: buffered }; delete statusBufRef.current[msg.mid] }
+    setConvos((prev) => {
+      const list = prev[convId] || []
+      if (msg.mid && list.some((x) => x.mid === msg.mid)) return prev
+      const ts = msg.ts || Date.now()
+      // 常规追加到末尾；迟到/乱序消息按 ts 插入正确时间位置，保持时间序
+      if (list.length === 0 || ts >= (list[list.length - 1].ts || 0)) return { ...prev, [convId]: [...list, msg] }
+      const next = list.slice()
+      let i = next.length - 1
+      while (i >= 0 && (next[i].ts || 0) > ts) i--
+      next.splice(i + 1, 0, msg)
+      return { ...prev, [convId]: next }
+    })
   }
   function upsertGroupLocal (group) {
     if (!group || !group.id) return
@@ -1551,6 +1795,7 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
     setTimeout(() => removeToastSoft(id), delay)
   }
   function addToast (t) {
+    if ((settingsRef.current.presence || 'online') === 'dnd') return // 全局免打扰：不弹应用内消息通知
     const id = ++toastSeq.current
     setToasts((prev) => [...prev, { id, ...t }])
     if (document.hasFocus()) scheduleToastExpiry(id)
@@ -1570,12 +1815,29 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
     if (m.scope === 'group') return
     const convId = m.scope === 'room' && m.room ? m.room.id : m.from
     if (m.room) upsertGroupLocal(m.room)
-    if (m.name && !m.self) setNameById((prev) => ({ ...prev, [m.from]: m.name }))
+    if (m.name && !m.self) setNameById((prev) => {
+      const hasRemark = ((peersRef.current || []).find((p) => p.id === m.from) || {}).remark
+      return hasRemark ? prev : { ...prev, [m.from]: m.name } // 有备注时不被消息携带的昵称覆盖
+    })
     pushMsg(convId, m)
     if (m.self) return // 自己操作产生的系统消息进入会话，但不计未读、不弹通知
     if (m.system === 'avatar-changed') return // 群头像更新只保留聊天框内文字，不计未读、不弹通知
-    if (convId !== activeRef.current) setUnread((u) => ({ ...u, [convId]: (u[convId] || 0) + 1 }))
+    if (convId === activeRef.current) bumpRead(convId, m.ts || Date.now()) // 活动会话即时已读；非活动会话未读由派生自动计数
     // 这里仅处理会话状态，系统通知由主进程负责
+  }
+  // 推进已读位（更新本地状态 + 持久化，单调前进）；未读数由 convos + reads 派生
+  function bumpRead (convId, ts) {
+    if (!convId) return
+    const v = ts || Date.now()
+    setReads((r) => (v > (r[convId] || 0) ? { ...r, [convId]: v } : r))
+    if (api.store.setRead) api.store.setRead(convId, v)
+  }
+  // 标记会话已读：把已读位推进到最新消息（用户打开/正在查看会话时调用）
+  function markRead (convId) {
+    if (!convId) return
+    const list = convosRef.current[convId] || []
+    const lastTs = list.length ? (list[list.length - 1].ts || 0) : 0
+    bumpRead(convId, Math.max(Date.now(), lastTs))
   }
   function selectConv (id) {
     const prev = activeRef.current
@@ -1589,7 +1851,7 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
       if (api.store.setDraft) api.store.setDraft(prev, text)
       setText(drafts[id] || '')
     }
-    setActive(id); setUnread((u) => ({ ...u, [id]: 0 }))
+    setActive(id); markRead(id)
     setVisibleCount(MSG_PAGE)
     atBottomRef.current = true
     setAtBottom(true)
@@ -1629,27 +1891,30 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
     const online = new Set((peers || []).filter((p) => p.online).map((p) => p.id))
     return room.members.some((id) => id !== (self && self.id) && online.has(id))
   }
+  function hasRoomRecipient (room) {
+    return !!(room && Array.isArray(room.members) && room.members.some((id) => id !== (self && self.id)))
+  }
   function canSendToConv (id) {
+    if (!id) return false
     const room = roomById(id)
-    if (room) return hasOnlineRoomRecipient(room)
-    const peer = peerById(id)
-    return !!(peer && peer.online)
+    if (room) return hasRoomRecipient(room)
+    return true // 私聊：离线也可发送（自动暂存，上线补发）
   }
   async function sendTextToConv (convId, value, opts) {
     const room = roomById(convId)
     if (room) {
-      if (!hasOnlineRoomRecipient(room)) return { ok: false, error: '群成员均离线，暂时无法发送' }
+      if (!hasRoomRecipient(room)) return { ok: false, error: '群聊没有可接收成员' }
+      if (opts && opts.burn && !hasOnlineRoomRecipient(room)) return { ok: false, error: '群成员均离线，阅后即焚消息不支持暂存' }
       return api.p2p.sendRoom(room.id, value, opts)
     }
-    const peer = peerById(convId)
-    if (!peer || !peer.online) return { ok: false, error: '对方离线，暂时无法发送' }
-    return api.p2p.sendPrivate(convId, value, opts)
+    return api.p2p.sendPrivate(convId, value, opts) // 私聊离线时后端自动暂存到发件箱，上线后补发
   }
   async function handleSend () {
     const t = text.trim()
     const atts = pendingAtts
     if ((!t && !atts.length) || !self) return
     const conv = activeRef.current
+    if (!canSendToConv(conv)) { showChatNotice(conv ? '当前会话不可发送' : '请选择会话'); return }
     const batchId = ((t ? 1 : 0) + atts.length) > 1 ? ('b-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7)) : null
     if (t) {
       const opts = { burn: burnOn, ttl: burnTtl, batch: batchId }
@@ -1660,6 +1925,7 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
         setDrafts((prev) => { const n = { ...prev }; delete n[conv]; return n })
         if (api.store.setDraft) api.store.setDraft(conv, '')
         pushMsg(conv, res.msg)
+        if (res.queued) showChatNotice(roomById(conv) ? '群消息已暂存，离线成员上线后自动发送' : '对方离线，消息已暂存，对方上线后自动发送')
       } else { showChatNotice((res && res.error) || '发送失败'); return }
     }
     if (atts.length) {
@@ -1691,22 +1957,44 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
     const conv = activeRef.current
     const room = roomById(conv)
     if (room) {
-      if (!hasOnlineRoomRecipient(room)) return { error: '群成员均离线，暂时无法发送文件' }
+      if (!hasRoomRecipient(room)) return { error: '群聊没有可接收成员' }
       return { scope: 'room', toId: conv }
     }
-    if (!peerById(conv)?.online) return { error: '对方离线，暂时无法发送文件' }
-    return { scope: 'private', toId: conv }
+    return { scope: 'private', toId: conv } // 私聊：离线也可发送（自动暂存，上线补发）
   }
-  function sendFiles (paths, batch) {
+  function sendFiles (paths, batch, opts) {
     if (!paths || !paths.length) return
     const t = fileSendTarget()
     if (t.error) { showChatNotice(t.error); return }
-    api.file.send(t.scope, t.toId, paths, batch || null).then((out) => { (out || []).forEach((msg) => pushMsg(activeRef.current, msg)) })
+    api.file.send(t.scope, t.toId, paths, batch || null, opts || null).then((out) => { (out || []).forEach((msg) => pushMsg(activeRef.current, msg)) })
   }
   async function attachFiles () {
     if (!api.file.choose) { showChatNotice('当前环境不支持选择文件'); return }
     const list = await api.file.choose()
     if (list && list.length) setPendingAtts((prev) => [...prev, ...list])
+  }
+  // ---------------- 表情包 ----------------
+  async function loadStickers (force) {
+    if (!api.stickers || !api.stickers.list) return
+    if (stickersLoadedRef.current && !force) return
+    stickersLoadedRef.current = true
+    setStickers((await api.stickers.list()) || [])
+  }
+  async function importStickers () {
+    if (!api.stickers || !api.stickers.add) { showChatNotice('当前环境不支持导入表情包，请重启应用'); return }
+    const res = await api.stickers.add()
+    if (res) {
+      setStickers(res.stickers || [])
+      if (res.skipped) showChatNotice(`${res.skipped} 张图片超过 2MB 或导入失败，已跳过`)
+    }
+  }
+  async function removeSticker (id) {
+    if (!api.stickers || !api.stickers.remove) return
+    setStickers((await api.stickers.remove(id)) || [])
+  }
+  function sendSticker (s) {
+    sendFiles([s.path], null, { sticker: true }) // 标记为表情包：气泡内不展示文件操作
+    setEmojiOpen(false)
   }
   async function takeShot (mode) {
     setShotOpen(false)
@@ -1717,6 +2005,7 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
   function removePendingAtt (idx) {
     setPendingAtts((prev) => prev.filter((_, i) => i !== idx))
   }
+  // 拖到发送框：暂存待发（图片显示缩略图），与原有功能一致
   function onDropFiles (e) {
     e.preventDefault()
     const items = Array.from(e.dataTransfer.files || [])
@@ -1724,9 +2013,71 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
       .map((f) => ({ path: f.path, name: f.name, size: f.size, preview: (f.type || '').startsWith('image/') ? URL.createObjectURL(f) : '' }))
     if (items.length) setPendingAtts((prev) => [...prev, ...items])
   }
+  // 拖到聊天区：单/多个文件均立即发送
+  function sendDroppedFilesDirect (e) {
+    e.preventDefault()
+    const paths = Array.from(e.dataTransfer.files || []).filter((f) => f.path).map((f) => f.path)
+    if (!paths.length) return
+    const batch = paths.length > 1 ? ('b-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7)) : null
+    sendFiles(paths, batch) // 内部已校验在线状态并提示
+  }
+  // 发送框粘贴图片：写入临时文件后加入待发附件（支持 Ctrl+V 截图）
+  async function onComposerPaste (e) {
+    const items = Array.from((e.clipboardData && e.clipboardData.items) || [])
+    const imgItem = items.find((it) => it.kind === 'file' && (it.type || '').startsWith('image/'))
+    if (!imgItem) return
+    const file = imgItem.getAsFile()
+    if (!file) return
+    e.preventDefault()
+    if (!api.file || !api.file.saveImage) { showChatNotice('当前环境不支持粘贴图片'); return }
+    const dataUrl = await new Promise((resolve) => { const r = new FileReader(); r.onload = () => resolve(r.result); r.onerror = () => resolve(''); r.readAsDataURL(file) })
+    if (!dataUrl) return
+    const info = await api.file.saveImage(dataUrl)
+    if (info && info.path) setPendingAtts((prev) => [...prev, { path: info.path, name: info.name || '粘贴图片.png', size: info.size || 0, preview: dataUrl }])
+  }
   function removeOffer (mid) { setConvos((prev) => { const n = {}; for (const k of Object.keys(prev)) n[k] = prev[k].filter((x) => !(x.mid === mid && x.type === 'file-offer')); return n }) }
   function acceptFile (mid) { api.file.accept(mid); removeOffer(mid) }
   function rejectFile (mid) { api.file.reject(mid); removeOffer(mid) }
+  function updateMsgStatus (conv, mid, status) {
+    if (!conv || !mid) return
+    const list = convosRef.current[conv] || []
+    if (list.some((x) => x.mid === mid)) {
+      setConvos((prev) => ({ ...prev, [conv]: (prev[conv] || []).map((x) => (x.mid === mid ? { ...x, status } : x)) }))
+    } else {
+      statusBufRef.current[mid] = status // 消息还没渲染，先缓存，pushMsg 时回填
+    }
+  }
+  async function retryMessage (m) {
+    if (!m || !m.self) return
+    const conv = activeRef.current
+    if (roomById(conv)) return // 群聊暂不支持送达确认/重试
+    if (!api.p2p.resend) { showChatNotice('当前环境不支持重试，请重启应用'); return }
+    updateMsgStatus(conv, m.mid, 'sending')
+    const res = await api.p2p.resend(conv, m.mid, m.text || '', { burn: m.burn, ttl: m.ttl, reply: m.reply, fwd: m.fwd, batch: m.batch })
+    if (!res || !res.ok) { updateMsgStatus(conv, m.mid, 'failed'); showChatNotice((res && res.error) || '重试失败') }
+  }
+  function setFileStatusByMid (mid, status) {
+    setConvos((prev) => {
+      let changed = false
+      const next = {}
+      for (const k of Object.keys(prev)) {
+        const arr = prev[k]
+        let hit = false
+        const na = arr.map((x) => { if (x.mid === mid && x.self && (x.type === 'file' || x.type === 'file-offer')) { hit = true; return { ...x, status } } return x })
+        if (hit) { changed = true; next[k] = na } else next[k] = arr
+      }
+      return changed ? next : prev
+    })
+  }
+  function cancelFile (mid) { if (api.file.cancel) api.file.cancel(mid); setFileStatusByMid(mid, 'failed') }
+  async function retryFile (m) {
+    if (!m || !m.self || !m.path) return
+    if (roomById(m.to)) { showChatNotice('群文件暂不支持重试'); return }
+    if (!api.file.retry) { showChatNotice('当前环境不支持重试，请重启应用'); return }
+    setFileStatusByMid(m.mid, 'sending')
+    const res = await api.file.retry(m.to, m.mid, m.path, m.batch || null)
+    if (!res || !res.ok) { setFileStatusByMid(m.mid, 'failed'); showChatNotice((res && res.error) || '重试失败') }
+  }
   function applyReaction (conv, mid, emoji, from) {
     setConvos((prev) => ({
       ...prev,
@@ -1824,24 +2175,6 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
     document.addEventListener('mouseup', up)
   }
 
-  // 个性状态：输入时防止中文输入法重复提交
-  const sigInputRef = useRef(null)
-  const sigComposingRef = useRef(false)
-  const sigTimerRef = useRef(null)
-  useEffect(() => {
-    if (document.activeElement !== sigInputRef.current && !sigComposingRef.current) setSigDraft(settings.statusText || '')
-  }, [settings.statusText])
-  useEffect(() => () => { if (sigTimerRef.current) clearTimeout(sigTimerRef.current) }, [])
-  function commitSig (value) {
-    const next = (value == null ? sigDraft : value).slice(0, 40)
-    if (sigTimerRef.current) { clearTimeout(sigTimerRef.current); sigTimerRef.current = null }
-    if (next !== (settingsRef.current.statusText || '')) patchSettings({ statusText: next })
-  }
-  function scheduleSigSave (value) {
-    if (sigTimerRef.current) clearTimeout(sigTimerRef.current)
-    sigTimerRef.current = setTimeout(() => commitSig(value), 450)
-  }
-
   // 定位到某条消息：必要时先切换会话，再滚动到消息并高亮
   const flashTimerRef = useRef(null)
   function locateMessage (conv, mid) {
@@ -1890,8 +2223,15 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
     if (!group || !api.avatar || !api.avatar.pickImage || !api.store.setGroupAvatar) return
     const res = await api.avatar.pickImage()
     if (res && res.ok) {
-      const compact = (await compressImageDataUrl(res.dataUrl, 96)) || res.dataUrl
-      const next = await api.store.setGroupAvatar(group.id, { type: 'image', imageDataUrl: compact, zoom: 120, x: 50, y: 50 })
+      let payload
+      if (res.gif && res.dataUrl.length <= ANIMATED_GIF_MAX_CHARS) {
+        // \u5c0f\u52a8\u56fe\uff1a\u4fdd\u7559\u52a8\u753b\uff0c\u9644\u9759\u6001\u9996\u5e27\u5907\u7528
+        payload = { type: 'image', imageDataUrl: res.dataUrl, staticDataUrl: (await compressImageDataUrl(res.dataUrl, 96)) || '', zoom: 120, x: 50, y: 50 }
+      } else {
+        if (res.gif) showChatNotice('\u52a8\u56fe\u8d85\u8fc7 ' + ANIMATED_GIF_MAX_KB + 'KB\uff0c\u7fa4\u5934\u50cf\u5df2\u8f6c\u4e3a\u9759\u6001\u5c55\u793a')
+        payload = { type: 'image', imageDataUrl: (await compressImageDataUrl(res.dataUrl, 96)) || res.dataUrl, zoom: 120, x: 50, y: 50 }
+      }
+      const next = await api.store.setGroupAvatar(group.id, payload)
       if (next) { upsertGroupLocal(next); setGroupManage(next) } else showChatNotice('\u4fee\u6539\u7fa4\u5934\u50cf\u5931\u8d25')
     } else if (res && res.error) showChatNotice(res.error)
   }
@@ -1913,7 +2253,6 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
         if (!res || !res.ok) { showChatNotice('\u9000\u51fa\u7fa4\u804a\u5931\u8d25'); return }
         setGroups((prev) => prev.filter((g) => g.id !== group.id))
         setConvos((prev) => { const n = { ...prev }; delete n[group.id]; return n })
-        setUnread((u) => { const n = { ...u }; delete n[group.id]; return n })
         if (activeRef.current === group.id) setActive('')
         if (groupManage && groupManage.id === group.id) setGroupManage(null)
       },
@@ -1999,7 +2338,7 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
       run: () => {
         api.store.clearHistory()
         setConvos({})
-        setUnread({})
+        setReads({})
         focusComposer()
       },
     })
@@ -2046,20 +2385,36 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
     if ('statusText' in patch) setSelf((prev) => (prev ? { ...prev, status: s.statusText || '' } : prev))
     if ('theme' in patch || 'fontPx' in patch || 'uiStyle' in patch || 'chatFont' in patch || 'chatFontPx' in patch) setDisplay({ theme: s.theme, fontPx: s.fontPx, uiStyle: s.uiStyle, chatFont: s.chatFont, chatFontPx: s.chatFontPx })
   }
+  STATIC_GIF = !!settings.staticGif // 每次渲染同步动图静态展示开关，Avatar/StaticImg 读取
   const onlineCount = peers.filter((p) => p.online).length
   const presence = PRESENCE.find((p) => p.key === settings.presence) || PRESENCE[0]
   const activeRoom = roomById(active)
   const isRoom = !!activeRoom
+  const showDetail = isRoom || !!searchPane // 非群聊隐藏聊天详情栏，仅搜索时展示
   const activePeer = isRoom ? null : peers.find((p) => p.id === active)
   const messages = convos[active] || []
   const visibleMessages = messages.length > visibleCount ? messages.slice(-visibleCount) : messages
   const hiddenCount = messages.length - visibleMessages.length
+  // 备注映射：气泡内发送者名/撤回提示等优先显示本机备注
+  const remarkById = {}
+  for (const p of peers) { if (p.remark) remarkById[p.id] = p.remark }
   const renderUnits = []
-  for (const m of visibleMessages) {
+  const batchUnits = new Map()
+  for (const raw of visibleMessages) {
+    const m = (!raw.self && raw.from && remarkById[raw.from]) ? { ...raw, name: remarkById[raw.from] } : raw
     const prev = renderUnits[renderUnits.length - 1]
     const groupable = !!m.batch && !m.system && !m.recalled && m.type !== 'file-offer' && !m.burn
-    if (groupable && prev && prev.groupable && prev.batch === m.batch && prev.self === !!m.self && prev.from === m.from) prev.items.push(m)
-    else renderUnits.push({ key: (m.mid || ('i' + renderUnits.length)), batch: m.batch || null, groupable, self: !!m.self, from: m.from, items: [m] })
+    const batchKey = groupable ? [m.batch, !!m.self, m.from || ''].join('|') : ''
+    if (groupable && batchUnits.has(batchKey)) {
+      batchUnits.get(batchKey).items.push(m)
+    } else if (groupable && prev && prev.groupable && prev.batch === m.batch && prev.self === !!m.self && prev.from === m.from) {
+      prev.items.push(m)
+      batchUnits.set(batchKey, prev)
+    } else {
+      const unit = { key: (m.mid || ('i' + renderUnits.length)), batch: m.batch || null, groupable, self: !!m.self, from: m.from, items: [m] }
+      renderUnits.push(unit)
+      if (groupable) batchUnits.set(batchKey, unit)
+    }
   }
   // Telegram 式发送者分组：同一人 5 分钟内连续发送的消息共用头像、时间和表情回应
   const SENDER_GAP = 5 * 60000
@@ -2080,7 +2435,7 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
   }
   const mMatch = text.match(/@(\S*)$/)
   const roomMembers = activeRoom
-    ? (activeRoom.members || []).map((id) => (id === (self && self.id) ? { id, name: self.name, online: true, self: true, presence: settings.presence || 'online', avatar: settings.avatar } : (peers.find((p) => p.id === id) || { id, name: nameById[id] || id.slice(0, 6), online: false })))
+    ? (activeRoom.members || []).map((id) => { if (id === (self && self.id)) return { id, name: self.name, online: true, self: true, presence: settings.presence || 'online', avatar: settings.avatar }; const p = peers.find((x) => x.id === id); return p ? { ...p, name: p.remark || p.name } : { id, name: nameById[id] || id.slice(0, 6), online: false } })
     : []
   const mentionBase = isRoom ? roomMembers.filter((p) => !p.self) : peers.filter((p) => p.online)
   const mentionList = (isRoom && mMatch) ? mentionBase.filter((p) => (p.name || '').toLowerCase().includes(mMatch[1].toLowerCase())).slice(0, 6) : []
@@ -2108,11 +2463,12 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
   })
   const activeDraft = drafts[active]
   const canSendActive = canSendToConv(active)
-  const canAttachActive = (!!activePeer && activePeer.online) || (isRoom && hasOnlineRoomRecipient(activeRoom))
+  const canAttachActive = !!activePeer || (isRoom && hasRoomRecipient(activeRoom)) // 私聊/群聊离线也可发（暂存补发）
+  const canBurnActive = isRoom ? hasOnlineRoomRecipient(activeRoom) : !!(activePeer && activePeer.online) // 即焚需对端真在线（不暂存补发）
   const selectedMemberCount = Object.values(groupMembers).filter(Boolean).length
   const managedGroup = groupManage ? (groups.find((g) => g.id === groupManage.id) || groupManage) : null
   const managedMembers = managedGroup
-    ? (managedGroup.members || []).map((id) => (id === (self && self.id) ? { id, name: self.name, online: true, self: true, presence: settings.presence || 'online', avatar: settings.avatar } : (peers.find((p) => p.id === id) || { id, name: nameById[id] || id.slice(0, 6), online: false })))
+    ? (managedGroup.members || []).map((id) => { if (id === (self && self.id)) return { id, name: self.name, online: true, self: true, presence: settings.presence || 'online', avatar: settings.avatar }; const p = peers.find((x) => x.id === id); return p ? { ...p, name: p.remark || p.name } : { id, name: nameById[id] || id.slice(0, 6), online: false } })
     : []
   const convTitle = (id) => {
     const room = roomById(id)
@@ -2147,7 +2503,7 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
   }
   const conversationItems = [
     ...groups.map((g) => ({ id: g.id, kind: 'room', title: g.name || '群聊', group: g, subtitle: `${(g.members || []).length} 位成员 · ${onlineMemberCount(g)} 在线`, last: lastMsgOf(g.id) })),
-    ...peers.map((p) => ({ id: p.id, kind: 'peer', title: p.name, peer: p, subtitle: p.online ? (p.status || presenceOf(p).label) : '离线', last: lastMsgOf(p.id) })),
+    ...peers.map((p) => ({ id: p.id, kind: 'peer', title: p.remark || p.name, peer: p, subtitle: p.online ? (p.status || presenceOf(p).label) : '离线', last: lastMsgOf(p.id) })),
   ].map((item) => ({
     ...item,
     lastTs: item.last ? (item.last.ts || 0) : 0,
@@ -2157,7 +2513,8 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
   const sideNeedle = sideQuery.trim().toLowerCase()
   const sideConversations = conversationItems
     .filter((item) => {
-      if (sideNeedle && !((item.title || '').toLowerCase().includes(sideNeedle) || (item.preview || '').toLowerCase().includes(sideNeedle))) return false
+      // 只按群名/人名过滤；消息内容搜索走顶部全局搜索或会话内搜索
+      if (sideNeedle && !(item.title || '').toLowerCase().includes(sideNeedle)) return false
       if (sideTab === 'groups') return item.kind === 'room'
       if (sideTab === 'online') return item.kind === 'peer' && item.peer && item.peer.online
       return true
@@ -2174,9 +2531,14 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
   return (
     <div className={'h-full flex flex-col ' + (shake ? 'shake' : '')}>
       <TopBar self={self} onGlobalSearch={() => setSearchPane((v) => (v === 'global' ? false : 'global'))} />
-      {netError && <div className="px-4 py-1 text-xs text-amber-400 shrink-0">网络提示：{netError}</div>}
+      {netError && (
+        <div className="px-4 py-1 text-xs text-amber-400 shrink-0 flex items-center gap-2">
+          <span>网络提示：{netError}</span>
+          {api.p2p.reconnect && <button onClick={() => { setNetError('重连中…'); api.p2p.reconnect() }} className="underline hover:opacity-80 shrink-0">重连</button>}
+        </div>
+      )}
 
-      <div className={'app-stage flex-1 min-h-0 ' + (standalone ? 'chat-only-shell flex' : 'three-pane-layout')} style={!standalone && paneWidth ? { gridTemplateColumns: `minmax(220px, 20%) minmax(480px, 1fr) 5px ${paneWidth}px` } : undefined}>
+      <div className={'app-stage flex-1 min-h-0 ' + (standalone ? 'chat-only-shell flex' : (showDetail ? 'three-pane-layout' : 'two-pane-layout'))} style={!standalone && showDetail && paneWidth ? { gridTemplateColumns: `minmax(220px, 20%) minmax(480px, 1fr) 2px ${paneWidth}px` } : undefined}>
         {!standalone && <aside className="sidebar-surface flex flex-col overflow-hidden min-w-0 border-r bd-soft">
           <div className="p-4 border-b bd-soft">
             <div className="flex items-center gap-3">
@@ -2208,17 +2570,8 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
                       </div>
                     )}
                   </div>
-                  <input
-                    ref={sigInputRef}
-                    value={sigDraft}
-                    maxLength={40}
-                    onChange={(e) => { const v = e.target.value.slice(0, 40); setSigDraft(v); if (!sigComposingRef.current) scheduleSigSave(v) }}
-                    onCompositionStart={() => { sigComposingRef.current = true }}
-                    onCompositionEnd={(e) => { sigComposingRef.current = false; const v = e.currentTarget.value.slice(0, 40); setSigDraft(v); scheduleSigSave(v) }}
-                    onBlur={() => commitSig()}
-                    placeholder="输入个性状态"
-                    className="field flex-1 min-w-0 rounded-lg px-2 py-0.5 text-[11px]"
-                  />
+                  {/* 个性签名仅展示（未设置则不显示），编辑入口在点击头像的资料弹窗中 */}
+                  {settings.statusText ? <span className="flex-1 min-w-0 text-[11px] txt-dim truncate" title={settings.statusText}>{settings.statusText}</span> : null}
                 </div>
               </div>
             </div>
@@ -2246,8 +2599,12 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
             )}
             {sideConversations.map((item) => (
               <div key={item.id} onClick={() => selectConv(item.id)} onContextMenu={(e) => { e.preventDefault(); setSideMenu({ x: e.clientX, y: e.clientY, item }) }} className={'side-item w-full flex items-center gap-2.5 px-2.5 py-2 text-sm cursor-pointer ' + (active === item.id ? 'side-item-active' : '')}>
-                {/* 头像 + 右上角未读角标 */}
-                <span className="relative shrink-0">
+                {/* 头像 + 右上角未读角标；点击头像查看对应资料（不切换会话） */}
+                <span
+                  className="relative shrink-0 cursor-pointer"
+                  title={item.kind === 'peer' ? '查看资料' : '查看群信息'}
+                  onClick={(e) => { e.stopPropagation(); if (item.kind === 'peer') setProfilePeer(item.peer); else setGroupManage(item.group) }}
+                >
                   {item.kind === 'peer' ? (
                     <Avatar name={item.title} id={item.id} size={30} dim={!item.peer.online} avatar={item.peer.avatar} />
                   ) : (
@@ -2341,7 +2698,7 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
             className="relative flex-1 min-h-0"
             onDragOver={(e) => { e.preventDefault(); if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files')) setDragOver(true) }}
             onDragLeave={(e) => { if (!(e.relatedTarget && e.currentTarget.contains(e.relatedTarget))) setDragOver(false) }}
-            onDrop={(e) => { setDragOver(false); onDropFiles(e) }}
+            onDrop={(e) => { setDragOver(false); sendDroppedFilesDirect(e) }}
           >
           <div ref={scrollRef} onScroll={onMessagesScroll} className="messages-scroll h-full overflow-auto">
             {hiddenCount > 0 && (
@@ -2410,8 +2767,8 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
                               </div>
                               )
                             : ((m.type === 'file' || m.type === 'file-offer')
-                                ? <FileMsg m={m} progress={fileProgress[m.mid]} onAccept={acceptFile} onReject={rejectFile} selfAvatar={settings.avatar} peerAvatar={messageAvatar(m)} {...shared} />
-                                : <Bubble m={m} now={now} showName={isRoom && !m.self && ui === 0} markdown={!!settings.markdown} selectMode={selectMode} selected={!!selected[m.mid]} onToggleSelect={toggleSelect} selfAvatar={settings.avatar} peerAvatar={messageAvatar(m)} {...shared} />)}
+                                ? <FileMsg m={m} progress={fileProgress[m.mid]} onAccept={acceptFile} onReject={rejectFile} onCancel={cancelFile} onRetry={retryFile} selfAvatar={settings.avatar} peerAvatar={messageAvatar(m)} {...shared} />
+                                : <Bubble m={m} now={now} showName={isRoom && !m.self && ui === 0} markdown={!!settings.markdown} selectMode={selectMode} selected={!!selected[m.mid]} onToggleSelect={toggleSelect} selfAvatar={settings.avatar} peerAvatar={messageAvatar(m)} onRetry={retryMessage} {...shared} />)}
                       </div>
                     )
                   })}
@@ -2421,8 +2778,8 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
           </div>
           {dragOver && (
             <div className="drop-overlay">
-              <Paperclip size={22} />
-              <span>松开鼠标，文件将加入发送栏</span>
+              <Send size={22} />
+              <span>松开鼠标，立即发送文件</span>
             </div>
           )}
           {!atBottom && (
@@ -2438,32 +2795,16 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
             </div>
           )}
 
-          <div className="composer-surface composer-box border-t bd-soft shrink-0 relative">
-            {emojiOpen && (
-              <div className="absolute left-3 bottom-[60px] glass-panel rounded-xl p-2 grid grid-cols-8 gap-1 z-10" style={{ maxWidth: 300 }}>
-                {EMOJIS.map((e) => <button key={e} onClick={() => { setText((t) => t + e); setEmojiOpen(false) }} className="text-lg rounded hover:bg-white/10">{e}</button>)}
-              </div>
-            )}
-            {/* 字体选择与聊天字号面板 */}
-            {fontOpen && (
-              <div ref={fontPanelRef} className="absolute left-3 bottom-[60px] rounded-xl p-2 z-10 w-44 shadow-xl" style={{ background: 'rgb(var(--panel-rgb))', border: '1px solid var(--border-hi)' }}>
-                <div className="space-y-0.5">
-                  {CHAT_FONTS.map((f) => (
-                    <button key={f.label} onClick={() => patchSettings({ chatFont: f.family })} style={{ fontFamily: f.family, background: settings.chatFont === f.family ? 'var(--accent-tint)' : 'transparent' }} className="w-full flex items-center gap-1 px-2 py-1.5 rounded-lg hover:bg-white/10 text-[13.5px] txt text-left">
-                      <span className="flex-1 truncate">{f.label}</span>
-                      {settings.chatFont === f.family && <Check size={13} className="accent-txt shrink-0" />}
-                    </button>
-                  ))}
-                </div>
-                <div className="mt-1.5 pt-2 px-1 border-t bd-soft">
-                  <input
-                    type="range" min={12} max={22} step={0.5} value={fontDraft} title="聊天字号"
-                    onChange={(e) => { const v = parseFloat(e.target.value); setFontDraft(v); setDisplay({ theme: settings.theme, fontPx: settings.fontPx, uiStyle: settings.uiStyle, chatFont: settings.chatFont, chatFontPx: v }) }}
-                    onMouseUp={(e) => patchSettings({ chatFontPx: parseFloat(e.currentTarget.value) })}
-                    onTouchEnd={(e) => patchSettings({ chatFontPx: parseFloat(e.currentTarget.value) })}
-                    className="w-full accent-indigo-500"
-                  />
-                </div>
+          <div
+            className="composer-surface composer-box border-t bd-soft shrink-0 relative"
+            onDragOver={(e) => { if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files')) { e.preventDefault(); setComposerDragOver(true) } }}
+            onDragLeave={(e) => { if (!(e.relatedTarget && e.currentTarget.contains(e.relatedTarget))) setComposerDragOver(false) }}
+            onDrop={(e) => { e.preventDefault(); setComposerDragOver(false); onDropFiles(e) }}
+          >
+            {composerDragOver && (
+              <div className="drop-overlay">
+                <Paperclip size={22} />
+                <span>松开鼠标，添加到发送栏</span>
               </div>
             )}
             {mentionList.length > 0 && (
@@ -2496,7 +2837,31 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
               </div>
             )}
             <div className="composer-tools flex items-center gap-2 mb-2 text-xs">
-              <button ref={fontBtnRef} onClick={() => { setFontOpen((v) => !v); setEmojiOpen(false); setShotOpen(false) }} title="字体设置" className={'btn-ghost inline-flex items-center justify-center px-2.5 py-1 rounded-md text-[13.5px] font-semibold leading-none ' + (fontOpen ? 'accent-txt' : '')}>A</button>
+              {/* 字体按钮与面板：面板展示在图标正上方 */}
+              <span className="relative">
+                <button ref={fontBtnRef} onClick={() => { setFontOpen((v) => !v); setEmojiOpen(false); setShotOpen(false) }} title="字体设置" className={'btn-ghost inline-flex items-center justify-center px-2.5 py-1 rounded-md text-[13.5px] font-semibold leading-none ' + (fontOpen ? 'accent-txt' : '')}>A</button>
+                {fontOpen && (
+                  <div ref={fontPanelRef} className="absolute bottom-full left-0 z-20 mb-1.5 rounded-xl p-2 w-44 shadow-xl" style={{ background: 'rgb(var(--panel-rgb))', border: '1px solid var(--border-hi)' }}>
+                    <div className="space-y-0.5">
+                      {CHAT_FONTS.map((f) => (
+                        <button key={f.label} onClick={() => patchSettings({ chatFont: f.family })} style={{ fontFamily: f.family, background: settings.chatFont === f.family ? 'var(--accent-tint)' : 'transparent' }} className="w-full flex items-center gap-1 px-2 py-1.5 rounded-lg hover:bg-white/10 text-[13.5px] txt text-left">
+                          <span className="flex-1 truncate">{f.label}</span>
+                          {settings.chatFont === f.family && <Check size={13} className="accent-txt shrink-0" />}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="mt-1.5 pt-2 px-1 border-t bd-soft">
+                      <input
+                        type="range" min={12} max={22} step={0.5} value={fontDraft} title="聊天字号"
+                        onChange={(e) => { const v = parseFloat(e.target.value); setFontDraft(v); setDisplay({ theme: settings.theme, fontPx: settings.fontPx, uiStyle: settings.uiStyle, chatFont: settings.chatFont, chatFontPx: v }) }}
+                        onMouseUp={(e) => patchSettings({ chatFontPx: parseFloat(e.currentTarget.value) })}
+                        onTouchEnd={(e) => patchSettings({ chatFontPx: parseFloat(e.currentTarget.value) })}
+                        className="w-full accent-indigo-500"
+                      />
+                    </div>
+                  </div>
+                )}
+              </span>
               {/* 截图按钮与选项 */}
               <span className="relative">
                 <button ref={shotBtnRef} onClick={() => { setShotOpen((v) => !v); setEmojiOpen(false); setFontOpen(false) }} disabled={!canAttachActive} title="截图" className={'btn-ghost inline-flex items-center gap-1 px-2 py-1 rounded-md disabled:opacity-40 ' + (shotOpen ? 'accent-txt' : '')}><Camera size={14} /></button>
@@ -2507,7 +2872,41 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
                   </div>
                 )}
               </span>
-              <button onClick={() => { setEmojiOpen((v) => !v); setFontOpen(false); setShotOpen(false) }} className="btn-ghost inline-flex items-center gap-1 px-2 py-1 rounded-md"><Smile size={14} /></button>
+              {/* 表情按钮与面板：面板展示在图标正上方 */}
+              <span className="relative">
+                <button ref={emojiBtnRef} onClick={() => { setEmojiOpen((v) => !v); setFontOpen(false); setShotOpen(false) }} className={'btn-ghost inline-flex items-center gap-1 px-2 py-1 rounded-md ' + (emojiOpen ? 'accent-txt' : '')}><Smile size={14} /></button>
+                {emojiOpen && (
+                  <div ref={emojiPanelRef} className="absolute bottom-full left-0 z-20 mb-1.5 glass-panel rounded-xl p-2" style={{ width: 300 }}>
+                    {/* Emoji 与表情包同层级标签 */}
+                    <div className="flex items-center gap-1 mb-1.5">
+                      <button onClick={() => setEmojiTab('emoji')} className={'text-[11px] rounded-lg px-2 py-1 ' + (emojiTab === 'emoji' ? 'btn-primary' : 'btn-ghost')}>Emoji</button>
+                      <button onClick={() => { setEmojiTab('sticker'); loadStickers() }} className={'text-[11px] rounded-lg px-2 py-1 ' + (emojiTab === 'sticker' ? 'btn-primary' : 'btn-ghost')}>表情包</button>
+                      {emojiTab === 'sticker' && <button onClick={importStickers} className="ml-auto btn-ghost text-[11px] rounded-lg px-2 py-1 inline-flex items-center gap-1"><Upload size={11} /> 导入</button>}
+                    </div>
+                    {emojiTab === 'emoji' ? (
+                      <div className="grid grid-cols-8 gap-1">
+                        {/* key 带索引：EMOJIS 中存在重复表情，纯字符 key 重复会导致切换标签时渲染错位 */}
+                        {EMOJIS.map((e, i) => <button key={i + e} onClick={() => { setText((t) => t + e); setEmojiOpen(false) }} className="text-lg rounded hover:bg-white/10">{e}</button>)}
+                      </div>
+                    ) : (
+                      <div className="max-h-60 overflow-auto scroll grid grid-cols-4 gap-1.5">
+                        {stickers.map((s) => (
+                          <button
+                            key={s.id}
+                            onClick={() => sendSticker(s)}
+                            onContextMenu={(e) => { e.preventDefault(); removeSticker(s.id) }}
+                            title="点击发送 · 右键删除"
+                            className="rounded-lg hover:bg-white/10 p-1"
+                          >
+                            <StaticImg src={s.dataUrl} alt="" className="w-full h-14 object-contain" />
+                          </button>
+                        ))}
+                        {stickers.length === 0 && <div className="col-span-4 text-[11px] txt-dim text-center py-5">还没有表情包，点右上角"导入"添加图片（支持 GIF）</div>}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </span>
               <button onClick={attachFiles} disabled={!canAttachActive} title="发送文件" className="btn-ghost inline-flex items-center gap-1 px-2 py-1 rounded-md disabled:opacity-40"><Paperclip size={14} /></button>
               <button onClick={() => { setSelectMode((v) => !v); setSelected({}) }} title="多选转发" className={'inline-flex items-center gap-1 px-2 py-1 rounded-md border transition ' + (selectMode ? 'border-emerald-500/50 accent-txt' : 'btn-ghost')}><Forward size={13} /></button>
               {selectMode && <button onClick={() => setForwardOpen(true)} disabled={!Object.keys(selected).length} className="btn-primary text-xs rounded px-2 py-1 disabled:opacity-40">转发 {Object.keys(selected).length || ''}</button>}
@@ -2533,7 +2932,7 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
                   )}
                 </span>
               )}
-              <button onClick={() => setBurnOn((v) => !v)} title={'阅后即焚，' + burnTtl + ' 秒后删除'} className={'inline-flex items-center gap-1 px-2 py-1 rounded-full border transition ' + (burnOn ? 'burn-on' : 'btn-ghost')}><Flame size={13} /> 即焚 {burnOn ? '开' : '关'}</button>
+              <button onClick={() => setBurnOn((v) => !v)} disabled={!canBurnActive} title={canBurnActive ? ('阅后即焚，' + burnTtl + ' 秒后删除') : '对方离线，阅后即焚不可用'} className={'inline-flex items-center gap-1 px-2 py-1 rounded-full border transition disabled:opacity-40 ' + (burnOn && canBurnActive ? 'burn-on' : 'btn-ghost')}><Flame size={13} /> 即焚 {burnOn && canBurnActive ? '开' : '关'}</button>
               <span className="ml-auto shrink-0 inline-flex items-center gap-2.5">
                 {activeDraft && <span className="txt-dim text-[10.5px]">草稿已保存</span>}
                 <span className="composer-hint">
@@ -2544,12 +2943,12 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
               </span>
             </div>
             <div className="composer-input-wrap flex items-end gap-2">
-              <textarea ref={composerRef} value={text} onChange={onTextChange} onKeyDown={onKeyDown} rows={1} placeholder={!active ? '请选择会话' : (!canSendActive ? (isRoom ? '暂无在线群成员，不能发送' : '对方离线，不能发送') : `发送给 ${convTitle(active)}...`)} className="field composer-input flex-1 resize-none rounded-lg px-3 py-2 text-sm max-h-32" />
+              <textarea ref={composerRef} value={text} onChange={onTextChange} onKeyDown={onKeyDown} onPaste={onComposerPaste} rows={1} placeholder={!active ? '请选择会话' : (!canSendActive ? (isRoom ? '群聊没有可接收成员' : '请选择会话') : `发送给 ${convTitle(active)}...`)} className="field composer-input flex-1 resize-none rounded-lg px-3 py-2 text-sm max-h-32" />
               <button onClick={handleSend} disabled={(!text.trim() && !pendingAtts.length) || !canSendActive} className="btn-primary composer-send inline-flex items-center gap-1 rounded-lg px-3 py-2 text-sm font-medium disabled:opacity-40"><Send size={15} />{pendingAtts.length > 0 ? ` 发送 ${pendingAtts.length} 个文件` : ' 发送'}</button>
             </div>
           </div>        </main>
 
-        {!standalone && <>
+        {!standalone && showDetail && <>
           <div className="pane-resizer shrink-0" onMouseDown={startPaneDrag} title="拖拽调整宽度" />
           <div className="detail-pane min-w-0 overflow-hidden flex" style={paneWidth ? { width: paneWidth } : undefined}>
             <DetailPane
@@ -2586,8 +2985,8 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
         />
       )}
       {showSettings && <SettingsPanel settings={settings} onPatch={patchSettings} onClose={() => setShowSettings(false)} onLock={onLock} onReset={onReset} onClearHistory={clearAllHistory} onClearDrafts={clearAllDrafts} />}
-      {showProfile && self && <ProfileDialog person={{ ...self, avatar: settings.avatar }} editable onRename={renameSelf} onClose={() => setShowProfile(false)} />}
-      {profilePeer && <ProfileDialog person={profilePeer} onClose={() => setProfilePeer(null)} />}
+      {showProfile && self && <ProfileDialog person={{ ...self, avatar: settings.avatar }} editable settings={settings} onPatchSettings={patchSettings} onRename={renameSelf} onClose={() => setShowProfile(false)} />}
+      {profilePeer && <ProfileDialog person={profilePeer} onSetRemark={(v) => api.store.setRemark(profilePeer.id, v)} onClose={() => setProfilePeer(null)} />}
       {confirmAction && <ConfirmDialog title={confirmAction.title} text={confirmAction.text} confirmText={confirmAction.confirmText} onClose={() => { setConfirmAction(null); focusComposer() }} onConfirm={() => { const action = confirmAction; setConfirmAction(null); setTimeout(() => action.run(), 0) }} />}
       {showCreateGroup && (
         <Overlay onClose={() => setShowCreateGroup(false)}>
@@ -2766,3 +3165,5 @@ export default function App () {
 
   return <div className="app-bg txt h-full"><div className="app-shell">{screen}</div></div>
 }
+
+// padding: workspace mount sync lags one write behind; this trailing comment absorbs the truncation so real code stays intact when verified from the sandbox. -------------------------------------------------------------------------------------------------------------------------

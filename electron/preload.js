@@ -24,10 +24,13 @@ contextBridge.exposeInMainWorld('api', {
   store: {
     getHistory: () => ipcRenderer.invoke('store:getHistory'),
     getDrafts: () => ipcRenderer.invoke('store:getDrafts'),
+    getReads: () => ipcRenderer.invoke('store:getReads'),
+    setRead: (convId, ts) => ipcRenderer.invoke('store:setRead', convId, ts),
     setDraft: (convId, text) => ipcRenderer.invoke('store:setDraft', convId, text),
     clearHistory: () => ipcRenderer.invoke('store:clearHistory'),
     clearConversation: (convId) => ipcRenderer.invoke('store:clearConversation', convId),
     clearDrafts: () => ipcRenderer.invoke('store:clearDrafts'),
+    setRemark: (peerId, remark) => ipcRenderer.invoke('store:setRemark', peerId, remark),
     getGroups: () => ipcRenderer.invoke('store:getGroups'),
     createGroup: (name, members) => ipcRenderer.invoke('store:createGroup', name, members),
     addGroupMembers: (groupId, memberIds) => ipcRenderer.invoke('store:addGroupMembers', groupId, memberIds),
@@ -38,9 +41,16 @@ contextBridge.exposeInMainWorld('api', {
     onGroups: (cb) => sub('store:groups', cb),
   },
 
+  stickers: {
+    list: () => ipcRenderer.invoke('stickers:list'),
+    add: () => ipcRenderer.invoke('stickers:add'),
+    remove: (id) => ipcRenderer.invoke('stickers:remove', id),
+  },
+
   settings: {
     get: () => ipcRenderer.invoke('settings:get'),
     set: (patch) => ipcRenderer.invoke('settings:set', patch),
+    onChanged: (cb) => sub('settings:changed', cb), // 主进程侧修改设置（如托盘切换免打扰）时推送
   },
 
   win: {
@@ -56,6 +66,8 @@ contextBridge.exposeInMainWorld('api', {
     setName: (name) => ipcRenderer.invoke('p2p:setName', name),
     sendRoom: (roomId, text, opts) => ipcRenderer.invoke('p2p:sendRoom', roomId, text, opts),
     sendPrivate: (toId, text, opts) => ipcRenderer.invoke('p2p:sendPrivate', toId, text, opts),
+    resend: (toId, mid, text, opts) => ipcRenderer.invoke('p2p:resend', toId, mid, text, opts),
+    reconnect: () => ipcRenderer.invoke('p2p:reconnect'),
     onPeers: (cb) => sub('p2p:peers', cb),
     onMessage: (cb) => sub('p2p:message', cb),
     onReady: (cb) => sub('p2p:ready', cb),
@@ -74,11 +86,14 @@ contextBridge.exposeInMainWorld('api', {
   },
 
   file: {
-    send: (scope, toId, paths, batch) => ipcRenderer.invoke('file:send', scope, toId, paths, batch),
+    send: (scope, toId, paths, batch, opts) => ipcRenderer.invoke('file:send', scope, toId, paths, batch, opts),
     pick: (scope, toId) => ipcRenderer.invoke('file:pick', scope, toId),
     choose: () => ipcRenderer.invoke('file:choose'),
+    saveImage: (dataUrl) => ipcRenderer.invoke('file:saveImage', dataUrl), // 粘贴图片落地为临时文件
     accept: (mid) => ipcRenderer.invoke('file:accept', mid),
     reject: (mid) => ipcRenderer.invoke('file:reject', mid),
+    cancel: (mid) => ipcRenderer.invoke('file:cancel', mid),
+    retry: (toId, mid, filePath, batch) => ipcRenderer.invoke('file:retry', toId, mid, filePath, batch),
     open: (p) => ipcRenderer.invoke('file:open', p),
     showInFolder: (p) => ipcRenderer.invoke('file:showInFolder', p),
     chooseDir: () => ipcRenderer.invoke('file:chooseDir'),
@@ -88,6 +103,7 @@ contextBridge.exposeInMainWorld('api', {
     onOffer: (cb) => sub('file:offer', cb),
     onSent: (cb) => sub('file:sent', cb),
     onFailed: (cb) => sub('file:failed', cb),
+    onRejected: (cb) => sub('file:rejected', cb),
   },
 
   avatar: {
@@ -110,9 +126,11 @@ contextBridge.exposeInMainWorld('api', {
     onRecall: (cb) => sub('msg:recall', cb),
     onReaction: (cb) => sub('msg:reaction', cb),
     onNudge: (cb) => sub('msg:nudge', cb),
+    onStatus: (cb) => sub('msg:status', cb),
   },
 
   sys: {
     openExternal: (url) => ipcRenderer.invoke('sys:openExternal', url),
+    revealLog: () => ipcRenderer.invoke('sys:revealLog'),
   },
 })

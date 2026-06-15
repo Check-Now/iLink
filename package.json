@@ -12,6 +12,7 @@
     "dev:electron": "wait-on tcp:127.0.0.1:5173 && cross-env NODE_ENV=development electron .",
     "dev:second": "wait-on tcp:127.0.0.1:5173 && cross-env NODE_ENV=development FREEDOM_DATA_DIR=data-2 electron .",
     "build": "vite build",
+    "test": "node test/ack-smoke.js && node test/room-smoke.js && node test/pathutil-smoke.js && node test/vault-smoke.js && node test/filetransfer-smoke.js && node test/avatar-smoke.js",
     "preview": "vite preview",
     "start": "cross-env NODE_ENV=production electron .",
     "pack:dir": "npm run build && electron-builder --win --dir",

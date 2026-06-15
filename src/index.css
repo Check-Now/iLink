@@ -383,11 +383,21 @@ body {
 }
 .three-pane-layout {
   display: grid;
-  grid-template-columns: minmax(220px, 20%) minmax(480px, 1fr) 5px minmax(220px, 20%);
+  grid-template-columns: minmax(220px, 20%) minmax(480px, 1fr) 2px minmax(220px, 20%);
   min-width: 925px;
   overflow: hidden;
 }
 .three-pane-layout > * {
+  min-width: 0;
+}
+/* 非群聊：侧栏与聊天区 1:4，两栏布局 */
+.two-pane-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 20%) minmax(480px, 1fr);
+  min-width: 700px;
+  overflow: hidden;
+}
+.two-pane-layout > * {
   min-width: 0;
 }
 .detail-pane {
@@ -399,7 +409,7 @@ body {
 @media (max-width: 980px) {
   .three-pane-layout {
     min-width: 925px;
-    grid-template-columns: 220px minmax(480px, 1fr) 5px 220px;
+    grid-template-columns: 220px minmax(480px, 1fr) 2px 220px;
     overflow-x: auto;
   }
 }
@@ -664,15 +674,24 @@ button:hover > .avatar { transform: scale(1.07); }
 }
 .float-soft { animation: float-soft 3s ease-in-out infinite; }
 
-/* 聊天区与右侧面板间的拖拽分隔条 */
+/* 聊天区与右侧面板间的拖拽分隔条：可见 2px，悬停热区左右各扩 3px */
 .pane-resizer {
-  width: 5px;
+  position: relative;
+  width: 2px;
   align-self: stretch;
   cursor: col-resize;
   background: transparent;
   margin: 0;
   z-index: 5;
   transition: background 0.15s ease;
+}
+.pane-resizer::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -3px;
+  right: -3px;
 }
 .pane-resizer:hover,
 .pane-resizer:active {

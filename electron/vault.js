@@ -14,6 +14,8 @@ const cryptoMod = require('./crypto')
 const SCRYPT = { N: 16384, r: 8, p: 1, keyLen: 32 }
 const MAGIC = 'FREEDOM_VAULT_OK'
 const HISTORY_CAP = 1000
+const DAY_MS = 24 * 60 * 60 * 1000 // 一天的毫秒数（历史保留裁剪用）
+const SAVE_DEBOUNCE_MS = 300       // 落盘去抖：合并 300ms 内的多次写
 
 function defaultName () {
   let h = ''
@@ -32,22 +34,8 @@ function deriveKey (password, salt, params) {
   })
 }
 
-function aesEncrypt (key, plaintext) {
-  const iv = crypto.randomBytes(12)
-  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv)
-  const ct = Buffer.concat([cipher.update(plaintext), cipher.final()])
-  const tag = cipher.getAuthTag()
-  return Buffer.concat([iv, tag, ct])
-}
-
-function aesDecrypt (key, buf) {
-  const iv = buf.subarray(0, 12)
-  const tag = buf.subarray(12, 28)
-  const ct = buf.subarray(28)
-  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv)
-  decipher.setAuthTag(tag)
-  return Buffer.concat([decipher.update(ct), decipher.final()])
-}
+// 本地存储的 AES-256-GCM 加解密复用 crypto.encryptBuf/decryptBuf：
+// 二者载荷格式(iv|tag|ct)字节一致，store.enc 与旧数据完全兼容，避免重复实现同一套原语。
 
 class Vault {
   constructor (dataDir) {
@@ -69,9 +57,29 @@ class Vault {
     if (!data.keys || !data.keys.pub || !data.keys.priv) data.keys = cryptoMod.generateKeyPair()
     if (!data.history) data.history = {}
     if (!data.contacts) data.contacts = {}
+    for (const [id, name] of [['A', 'Alice'], ['B', 'Bob']]) {
+      if (data.contacts[id] && data.contacts[id].name === name) delete data.contacts[id]
+    }
     if (!Array.isArray(data.groups)) data.groups = []
     if (!data.settings) data.settings = {}
-    const s = data.settings
+    this._ensureSettings(data.settings)
+    if (!data.drafts) data.drafts = {}
+    if (!data.reads || typeof data.reads !== 'object') data.reads = {} // 各会话已读位(ts)，用于跨重启恢复未读数
+    if (!data.outbox || typeof data.outbox !== 'object') data.outbox = {} // 离线发件箱:peerId -> [item]，持久化待发(文本/文件)
+    if (!data.createdAt) data.createdAt = Date.now()
+    if (!data.readsInit) {
+      // 首次升级：把已有历史标记为已读，避免旧消息一次性全部被计为未读
+      for (const conv of Object.keys(data.history || {})) {
+        const arr = data.history[conv]
+        if (Array.isArray(arr) && arr.length) { const last = arr[arr.length - 1]; if (last && last.ts) data.reads[conv] = Math.max(data.reads[conv] || 0, last.ts) }
+      }
+      data.readsInit = true
+    }
+    return data
+  }
+
+  // 各设置项的默认值与迁移（从 _ensureFields 抽出：单一职责、便于维护与定位）
+  _ensureSettings (s) {
     if (typeof s.burnDefault !== 'boolean') s.burnDefault = false
     if (typeof s.burnTtl !== 'number') s.burnTtl = 10
     if (typeof s.anonymous !== 'boolean') s.anonymous = false
@@ -94,6 +102,7 @@ class Vault {
     if (typeof s.closeAction !== 'string') s.closeAction = 'ask'
     if (typeof s.receiveMode !== 'string') s.receiveMode = 'auto'
     if (typeof s.downloadDir !== 'string') s.downloadDir = ''
+    if (typeof s.maxFileMB !== 'number' || s.maxFileMB < 0) s.maxFileMB = 0
     if (typeof s.markdown !== 'boolean') s.markdown = true
     if (!Array.isArray(s.pinned)) s.pinned = []
     if (!Array.isArray(s.muted)) s.muted = []
@@ -102,9 +111,7 @@ class Vault {
     if (typeof s.udpPort !== 'number') s.udpPort = 51888
     if (typeof s.broadcastAddrs !== 'string') s.broadcastAddrs = ''
     if (!s.avatar || typeof s.avatar !== 'object') s.avatar = { type: 'text', text: '', color: '' }
-    if (!data.drafts) data.drafts = {}
-    if (!data.createdAt) data.createdAt = Date.now()
-    return data
+    return s
   }
 
   _writeAccount (obj) {
@@ -117,7 +124,7 @@ class Vault {
   _saveNow () {
     if (!this.key || !this.data) return
     this._ensureDir()
-    const buf = aesEncrypt(this.key, Buffer.from(JSON.stringify(this.data), 'utf8'))
+    const buf = cryptoMod.encryptBuf(this.key, Buffer.from(JSON.stringify(this.data), 'utf8'))
     const tmp = this.storePath + '.tmp'
     fs.writeFileSync(tmp, buf)
     fs.renameSync(tmp, this.storePath)
@@ -125,7 +132,7 @@ class Vault {
 
   _save () {
     if (this._saveTimer) return
-    this._saveTimer = setTimeout(() => { this._saveTimer = null; try { this._saveNow() } catch (_) {} }, 300)
+    this._saveTimer = setTimeout(() => { this._saveTimer = null; try { this._saveNow() } catch (_) {} }, SAVE_DEBOUNCE_MS)
   }
 
   flush () {
@@ -138,7 +145,7 @@ class Vault {
     this._ensureDir()
     const salt = crypto.randomBytes(16)
     const key = await deriveKey(password, salt)
-    const verifier = aesEncrypt(key, Buffer.from(MAGIC, 'utf8'))
+    const verifier = cryptoMod.encryptBuf(key, Buffer.from(MAGIC, 'utf8'))
     this.data = this._ensureFields({})
     this.key = key
     this._writeAccount({
@@ -156,10 +163,10 @@ class Vault {
     const salt = Buffer.from(account.salt, 'hex')
     const key = await deriveKey(password, salt, { N: account.N, r: account.r, p: account.p, keyLen: account.keyLen })
     let ok = false
-    try { ok = aesDecrypt(key, Buffer.from(account.verifier, 'base64')).toString('utf8') === MAGIC } catch (_) { ok = false }
+    try { ok = cryptoMod.decryptBuf(key, Buffer.from(account.verifier, 'base64')).toString('utf8') === MAGIC } catch (_) { ok = false }
     if (!ok) throw new Error('密码错误')
     let data
-    try { data = JSON.parse(aesDecrypt(key, fs.readFileSync(this.storePath)).toString('utf8')) } catch (_) { data = {} }
+    try { data = JSON.parse(cryptoMod.decryptBuf(key, fs.readFileSync(this.storePath)).toString('utf8')) } catch (_) { data = {} }
     this.key = key
     this.data = this._ensureFields(data)
     this.unlocked = true
@@ -174,12 +181,12 @@ class Vault {
     const salt = Buffer.from(account.salt, 'hex')
     const oldKey = await deriveKey(oldPw, salt, { N: account.N, r: account.r, p: account.p, keyLen: account.keyLen })
     let ok = false
-    try { ok = aesDecrypt(oldKey, Buffer.from(account.verifier, 'base64')).toString('utf8') === MAGIC } catch (_) { ok = false }
+    try { ok = cryptoMod.decryptBuf(oldKey, Buffer.from(account.verifier, 'base64')).toString('utf8') === MAGIC } catch (_) { ok = false }
     if (!ok) throw new Error('原密码错误')
     if (!newPw || String(newPw).length < 4) throw new Error('新密码至少 4 位')
     const newSalt = crypto.randomBytes(16)
     const newKey = await deriveKey(newPw, newSalt)
-    const verifier = aesEncrypt(newKey, Buffer.from(MAGIC, 'utf8'))
+    const verifier = cryptoMod.encryptBuf(newKey, Buffer.from(MAGIC, 'utf8'))
     this.key = newKey
     this._writeAccount({
       v: 1, kdf: 'scrypt', N: SCRYPT.N, r: SCRYPT.r, p: SCRYPT.p, keyLen: SCRYPT.keyLen,
@@ -236,12 +243,23 @@ class Vault {
         address: p.address || prev.address || null,
         status: p.status != null ? p.status : (prev.status || ''),
         avatar: p.avatar || prev.avatar || null,
+        remark: prev.remark || '', // 本机备注：仅存本地，不随对方资料更新被覆盖
         lastSeen: p.lastSeen || Date.now(),
       }
       if (JSON.stringify(prev) !== JSON.stringify(next)) { this.data.contacts[p.id] = next; changed = true }
     }
     if (changed) this._save()
     return this.getContacts()
+  }
+
+  // 设置联系人备注（仅本机可见，不参与任何广播）
+  setContactRemark (id, remark) {
+    if (!this.data || !id) return null
+    if (!this.data.contacts) this.data.contacts = {}
+    const prev = this.data.contacts[id] || { id, name: id.slice(0, 6) }
+    this.data.contacts[id] = { ...prev, remark: (remark || '').toString().trim().slice(0, 32) }
+    this._save()
+    return this.data.contacts[id]
   }
 
   getGroups () {
@@ -289,17 +307,25 @@ class Vault {
   }
 
   appendMessage (convId, msg) {
-    if (!this.data || !convId || !msg) return
+    if (!this.data || !convId || !msg || msg.burn) return // 阅后即焚消息绝不落库（仅内存）
     if (!this.data.history[convId]) this.data.history[convId] = []
     const arr = this.data.history[convId]
-    arr.push(msg)
+    const ts = msg.ts || Date.now()
+    // 常规追加到末尾(新消息 ts 最大)；迟到/乱序消息按 ts 插入正确位置，保持时间序
+    if (arr.length === 0 || ts >= (arr[arr.length - 1].ts || 0)) {
+      arr.push(msg)
+    } else {
+      let i = arr.length - 1
+      while (i >= 0 && (arr[i].ts || 0) > ts) i--
+      arr.splice(i + 1, 0, msg)
+    }
     if (arr.length > HISTORY_CAP) arr.splice(0, arr.length - HISTORY_CAP)
     this._save()
   }
 
   pruneHistory (days) {
     if (!this.data || !days || days <= 0) return
-    const cutoff = Date.now() - days * 86400000
+    const cutoff = Date.now() - days * DAY_MS
     let changed = false
     for (const k of Object.keys(this.data.history)) {
       const arr = this.data.history[k]
@@ -328,9 +354,41 @@ class Vault {
     this._save()
   }
 
-  clearHistory () { if (this.data) { this.data.history = {}; this._save() } }
+  // 更新自己发出消息的发送状态(sending/sent/delivered/failed)，供重启后恢复
+  setMessageStatus (convId, mid, status) {
+    const arr = this.data && this.data.history[convId]
+    if (!arr) return
+    const m = arr.find((x) => x.mid === mid)
+    if (m && m.self) { m.status = status; this._save() }
+  }
+
+  clearHistory () { if (this.data) { this.data.history = {}; this.data.reads = {}; this._save() } }
   clearConversation (convId) { if (this.data && this.data.history[convId]) { delete this.data.history[convId]; this._save() } }
   getDrafts () { return this.data ? (this.data.drafts || {}) : {} }
+  getReads () { return this.data ? (this.data.reads || {}) : {} }
+  // 已读位单调前进：记录某会话“已读到的最新消息时间”，未读数据此重算（跨重启恢复）
+  setRead (convId, ts) {
+    if (!this.data || !convId) return
+    if (!this.data.reads) this.data.reads = {}
+    const v = ts || Date.now()
+    if (v > (this.data.reads[convId] || 0)) { this.data.reads[convId] = v; this._save() }
+  }
+
+  // -------- 离线发件箱（持久化，确认送达后才移除）--------
+  getOutbox () { return this.data ? (this.data.outbox || {}) : {} }
+  outboxAdd (peerId, item) {
+    if (!this.data || !peerId || !item || !item.mid || item.burn) return // 阅后即焚绝不入发件箱
+    if (!this.data.outbox) this.data.outbox = {}
+    const arr = this.data.outbox[peerId] || (this.data.outbox[peerId] = [])
+    if (arr.some((x) => x.mid === item.mid)) return // 去重，避免重复入队
+    arr.push(item); this._save()
+  }
+  outboxRemove (peerId, mid) {
+    if (!this.data || !this.data.outbox || !this.data.outbox[peerId]) return
+    const arr = this.data.outbox[peerId]
+    const i = arr.findIndex((x) => x.mid === mid)
+    if (i >= 0) { arr.splice(i, 1); if (!arr.length) delete this.data.outbox[peerId]; this._save() }
+  }
   clearDrafts () { if (this.data) { this.data.drafts = {}; this._save() } }
   setDraft (convId, text) {
     if (!this.data) return

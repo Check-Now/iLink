@@ -13,14 +13,24 @@ const os = require('os')
 const crypto = require('crypto')
 const { EventEmitter } = require('events')
 const cryptoMod = require('./crypto')
+const { publicAvatar } = require('./avatarutil') // 头像限长/裁剪逻辑与 main 进程共用，避免重复
 
 const DISCOVERY_PORT = 51888
 const MAGIC = 'FRDM1'
-const HEARTBEAT_MS = 3000
-const OFFLINE_MS = 10000
-const SWEEP_MS = 2000
+const HEARTBEAT_MS = 2000  // 心跳更频繁，离线判定更快
+const OFFLINE_MS = 6000     // 约 3 个心跳未到即判离线（原 10s → 6s）
+const SWEEP_MS = 1500       // 更勤地扫描离线
 const SEEN_MAX = 800
-const AVATAR_MAX_CHARS = 32 * 1024
+const ACK_TIMEOUT_MS = 1500 // 私聊消息等待对端 ACK 的超时；超时未确认则重发
+const ACK_MAX_RETRY = 3     // 最大重发次数(含首发共 4 次)，全部失败后标记“失败”
+const MAX_TEXT_CHARS = 3000        // 单条文本消息字数上限：消息体内嵌头像(≤32KB)+正文加密后须装进一个 UDP 数据报，超长会 EMSGSIZE 静默失败
+const SAFE_DATAGRAM_BYTES = 60000  // 单个 UDP 数据报安全上限(<理论 65507)；群发广播包超过此值则跳过广播，改由可靠单播(sendRoomMember)投递
+const TEXT_TOO_LONG_ERR = '消息过长，请精简后发送（上限 ' + MAX_TEXT_CHARS + ' 字）'
+
+// 文本是否超过单条消息上限。超长文本加密后会使 UDP 包超限，须在入队/发送前拦截，避免静默失败或发件箱反复重发
+function isTextTooLong (text) {
+  return (text || '').toString().length > MAX_TEXT_CHARS
+}
 
 function defaultName () {
   let host = ''
@@ -53,21 +63,7 @@ function validPort (p) {
   return p >= 1024 && p <= 65535 ? p : DISCOVERY_PORT
 }
 
-function publicAvatar (avatar) {
-  if (!avatar || typeof avatar !== 'object') return null
-  const type = avatar.type === 'image' ? 'image' : (avatar.type === 'preset' ? 'preset' : (avatar.type === 'text' ? 'text' : ''))
-  if (!type) return null
-  const out = { type }
-  if (avatar.text) out.text = String(avatar.text).slice(0, 2)
-  if (avatar.color) out.color = String(avatar.color).slice(0, 32)
-  if (type === 'image' && avatar.imageDataUrl && String(avatar.imageDataUrl).length <= AVATAR_MAX_CHARS) {
-    out.imageDataUrl = String(avatar.imageDataUrl)
-    out.zoom = 120
-    out.x = 50
-    out.y = 50
-  }
-  return out
-}
+// publicAvatar 已抽到 ./avatarutil（p2p 与 main 进程共用，见顶部 require）
 
 function parseBroadcastAddrs (value) {
   if (!value) return []
@@ -98,6 +94,11 @@ class P2P extends EventEmitter {
     this.keyCache = new Map()   // pubB64 -> derived AES key (Buffer)
     this.seen = []
     this.seenSet = new Set()
+    this.pending = new Map()    // mid -> { toId, pkt, attempts, timer } 等待对端 ACK 的私聊消息
+    this._reconnectTimer = null // 断线自愈：退避重连定时器
+    this._reconnectAttempts = 0 // 连续重连次数（成功绑定后清零），用于指数退避
+    this._closing = false       // stop() 后置真，阻止自愈/重连继续触发
+    this._ifSig = null          // 网卡 IPv4 地址签名，变化即触发重连
     this.discSock = null
     this.uniSock = null
     this.uport = 0
@@ -105,6 +106,7 @@ class P2P extends EventEmitter {
     this.started = false
     this.discoveryPort = validPort(opts.discoveryPort)
     this.broadcastAddrs = parseBroadcastAddrs(opts.broadcastAddrs)
+    this.disableDiscovery = !!opts.disableDiscovery
     const ifs = localIPv4Interfaces()
     this.localIp = ifs.length ? ifs[0].address : '127.0.0.1'
   }
@@ -118,9 +120,10 @@ class P2P extends EventEmitter {
     this.uniSock.on('message', (buf, rinfo) => this._onPacket(buf, rinfo))
     // Windows 上向无监听端口发 UDP 会收到 ICMP 端口不可达,触发 ECONNRESET 等
     // 瞬时错误;这些不致命(socket 仍可收发),不应升级为持久"网络异常"。
-    this.uniSock.on('error', (err) => { if (isTransientSockError(err)) return; this.emit('neterror', '单播端口错误:' + err) })
+    this.uniSock.on('error', (err) => { if (isTransientSockError(err)) return; this.emit('neterror', '单播端口错误:' + err); this._scheduleReconnect('uniSock ' + ((err && err.code) || err)) })
     this.uniSock.bind(0, () => {
       try { this.uport = this.uniSock.address().port } catch (_) { this.uport = 0 }
+      if (this.disableDiscovery) { this.emit('ready', this.getSelf()); return }
       this._startDiscovery()
     })
   }
@@ -128,14 +131,53 @@ class P2P extends EventEmitter {
   _startDiscovery () {
     this.discSock = dgram.createSocket({ type: 'udp4', reuseAddr: true })
     this.discSock.on('message', (buf, rinfo) => this._onPacket(buf, rinfo))
-    this.discSock.on('error', (err) => { if (isTransientSockError(err)) return; this.emit('neterror', '广播端口错误(' + this.discoveryPort + '):' + err) })
+    this.discSock.on('error', (err) => { if (isTransientSockError(err)) return; this.emit('neterror', '广播端口错误(' + this.discoveryPort + '):' + err); this._scheduleReconnect('discSock ' + ((err && err.code) || err)) })
     this.discSock.bind(this.discoveryPort, () => {
       try { this.discSock.setBroadcast(true) } catch (_) {}
+      this._reconnectAttempts = 0 // 绑定成功：重置退避计数
+      this._ifSig = this._interfaceSignature()
       this._sendPresence()
       this.timers.push(setInterval(() => this._sendPresence(), HEARTBEAT_MS))
       this.timers.push(setInterval(() => this._sweep(), SWEEP_MS))
+      this.timers.push(setInterval(() => this._checkInterfaces(), 4000)) // 网卡/IP 变化检测
       this.emit('ready', this.getSelf())
     })
+  }
+
+  // -------- 断线自愈：socket 致命错误 / 绑定失败 / 网卡切换后自动重连 --------
+  _interfaceSignature () {
+    return localIPv4Interfaces().map((n) => n.address).sort().join(',')
+  }
+  _checkInterfaces () {
+    if (this._closing) return
+    const sig = this._interfaceSignature()
+    if (this._ifSig != null && sig !== this._ifSig) {
+      this._ifSig = sig
+      console.warn('[p2p] 网卡/IP 变化，自动重连')
+      this.reconnect('network change')
+    }
+  }
+  _scheduleReconnect (reason) {
+    if (this._closing || this._reconnectTimer) return
+    const delay = Math.min(15000, 1000 * Math.pow(2, this._reconnectAttempts)) // 指数退避，封顶 15s
+    this._reconnectAttempts++
+    console.warn('[p2p] %dms 后重连，原因：%s', delay, reason)
+    this._reconnectTimer = setTimeout(() => { this._reconnectTimer = null; this.reconnect(reason) }, delay)
+  }
+  // 重建 socket（保留身份/peers/待确认消息）；心跳与发现重新开始，对端数秒内重新上线
+  reconnect (reason) {
+    if (this._closing) return
+    if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null }
+    console.warn('[p2p] 重连 socket，原因：%s', reason || '手动')
+    this.emit('reconnect', { reason: reason || 'manual' })
+    for (const t of this.timers) clearInterval(t)
+    this.timers = []
+    try { if (this.discSock) { this.discSock.removeAllListeners(); this.discSock.close() } } catch (_) {}
+    try { if (this.uniSock) { this.uniSock.removeAllListeners(); this.uniSock.close() } } catch (_) {}
+    this.discSock = null
+    this.uniSock = null
+    this.started = false
+    this.start()
   }
 
   _encode (obj) { return Buffer.from(MAGIC + JSON.stringify(obj), 'utf8') }
@@ -214,6 +256,7 @@ class P2P extends EventEmitter {
 
     if (m.t === 'presence') {
       const firstSeen = this._upsertPeer(m.from, m.name, rinfo.address, m.uport, m.pub, m.tport, m.status, m.avatar, m.presence)
+      this.emit('presence', this.peers.get(m.from))
       if (firstSeen) this._sendPresenceUnicast(rinfo.address, m.uport)
       return
     }
@@ -225,7 +268,13 @@ class P2P extends EventEmitter {
     }
 
     if (m.t === 'typing') { this.emit('typing', { from: m.from, to: m.to || null, room: m.room || null }); return }
-    if (m.t === 'recall') { this.emit('recall', { from: m.from, scope: m.scope, roomId: m.roomId || null, mid: m.mid }); return }
+    if (m.t === 'recall') {
+      this.emit('recall', { from: m.from, scope: m.scope, roomId: m.roomId || null, mid: m.mid })
+      // 私聊撤回回 ACK，发送端据此确认送达后停止补发（覆盖对端"假在线"/离线后上线）
+      if (m.scope !== 'room') { const peer = this.peers.get(m.from); if (peer && peer.uport && peer.address) try { this.uniSock.send(this._encode({ t: 'recallack', from: this.id, mid: m.mid }), peer.uport, peer.address, () => {}) } catch (_) {} }
+      return
+    }
+    if (m.t === 'recallack') { this.emit('recall-ack', { from: m.from, mid: m.mid }); return }
     if (m.t === 'reaction') { this.emit('reaction', { from: m.from, scope: m.scope, roomId: m.roomId || null, mid: m.mid, emoji: m.emoji }); return }
     if (m.t === 'nudge') { this.emit('nudge', { from: m.from, text: (m.text || '').toString().slice(0, 30) }); return }
 
@@ -237,8 +286,9 @@ class P2P extends EventEmitter {
       return
     }
 
+    if (m.t === 'ack') { this._onAck(m); return }
+
     if (m.t === 'msg') {
-      if (this._markSeen(m.mid)) return
       this._upsertPeer(m.from, undefined, rinfo.address, m.sport, m.spub) // 名字在密文里,这里只更新地址/公钥
       const key = this._keyForPub(m.spub || (this.peers.get(m.from) || {}).pub)
       if (!key) return
@@ -246,6 +296,10 @@ class P2P extends EventEmitter {
       if (!blob) return // 群聊里没有发给我的密文
       let pt
       try { pt = JSON.parse(cryptoMod.decrypt(key, blob)) } catch (_) { return }
+      // 私聊/群聊单发且发给我:先回 ACK(重复包也回,以覆盖此前丢失的 ACK),再按 mid 去重展示
+      // 群聊广播包无 m.to(不回 ACK,best-effort);群聊单发补达包带 m.to+m.did,按 did 回执以区分各成员
+      if (m.to === this.id && (m.scope === 'private' || m.scope === 'room')) this._sendAck(m.from, rinfo.address, m.sport, m.did || m.mid)
+      if (this._markSeen(m.mid)) return
       this._upsertPeer(m.from, pt.name, rinfo.address, m.sport, m.spub, undefined, undefined, pt.avatar)
       this.emit('message', {
         mid: m.mid,
@@ -303,7 +357,7 @@ class P2P extends EventEmitter {
   setTport (t) { this.tport = t || 0; this._sendPresence() }
 
   setStatus (s) { this.status = (s || '').toString().slice(0, 40); this._sendPresence() }
-  setPresence (p) { this.presence = ['online', 'busy', 'away'].includes(p) ? p : 'online'; this._sendPresence() }
+  setPresence (p) { this.presence = ['online', 'busy', 'away', 'dnd'].includes(p) ? p : 'online'; this._sendPresence() }
   setAvatar (avatar) { this.avatar = publicAvatar(avatar); this._sendPresence(); this._emitPeers() }
 
   sendNudge (toId, text) {
@@ -333,33 +387,94 @@ class P2P extends EventEmitter {
     return {
       mid, scope, from: this.id, name: this.name, avatar: this.avatar, to: to || null, text, room: o.room || null, system: o.system || null,
       ts: Date.now(), burn: !!o.burn, ttl: Math.min(60, Math.max(3, parseInt(o.ttl, 10) || 10)), reply: o.reply || null, fwd: o.fwd || null, batch: o.batch || null, self: true,
+      // 发送状态:私聊 sending->sent->delivered/failed;群聊只标 sent;阅后即焚不跟踪
+      status: o.burn ? null : (scope === 'private' ? 'sending' : 'sent'),
     }
   }
 
-  sendGroup (text, opts) {
-    text = (text || '').toString()
-    if (!text.trim()) return { ok: false, error: '空消息' }
-    const mid = crypto.randomUUID()
-    const ts = Date.now()
-    this._markSeen(mid)
-    const plaintext = this._buildPlaintext(text, opts)
-    const enc = {}
-    let count = 0
-    for (const p of this.peers.values()) {
-      if (!p.online || !p.pub || this.blacklist.has(p.id)) continue
-      const key = this._keyForPub(p.pub)
-      if (!key) continue
-      enc[p.id] = cryptoMod.encrypt(key, plaintext)
-      count++
+  // -------- 私聊消息可靠投递:ACK 确认 + 超时重发 --------
+  _sendAck (toId, address, uport, mid) {
+    if (!this.uniSock || !address || !uport || !mid) return
+    try { this.uniSock.send(this._encode({ t: 'ack', from: this.id, to: toId, mid }), uport, address, () => {}) } catch (_) {}
+  }
+  _onAck (m) {
+    const e = this.pending.get(m.mid)
+    if (!e) return
+    clearTimeout(e.timer)
+    this.pending.delete(m.mid)
+    this.emit('msg-status', { mid: m.mid, toId: e.toId, status: 'delivered' })
+  }
+  _trackAck (mid, toId, pkt) {
+    const entry = { toId, pkt, attempts: 0, timer: null }
+    entry.timer = setTimeout(() => this._retryAck(mid), ACK_TIMEOUT_MS)
+    this.pending.set(mid, entry)
+  }
+  _retryAck (mid) {
+    const e = this.pending.get(mid)
+    if (!e) return
+    const peer = this.peers.get(e.toId)
+    if (e.attempts >= ACK_MAX_RETRY || !peer || !peer.online || !peer.address || !peer.uport) {
+      this.pending.delete(mid)
+      console.warn('[p2p] 私聊消息多次未确认 mid=%s to=%s（交由 main 发件箱择机重发）', mid, e.toId)
+      this.emit('msg-status', { mid, toId: e.toId, status: 'failed' }) // main 据此保留发件箱条目，下次 presence 重发
+      return
     }
-    const pkt = this._encode({ t: 'msg', scope: 'group', from: this.id, spub: this.pub, sport: this.uport, mid, ts, enc })
-    if (this.discSock) for (const addr of this._broadcastTargets()) this.discSock.send(pkt, this.discoveryPort, addr, () => {})
-    return { ok: true, recipients: count, msg: this._echo(mid, 'group', null, text, opts) }
+    e.attempts++
+    try { this.uniSock.send(e.pkt, peer.uport, peer.address, () => {}) } catch (_) {}
+    e.timer = setTimeout(() => this._retryAck(mid), ACK_TIMEOUT_MS)
+  }
+  _clearPending (mid) {
+    const e = this.pending.get(mid)
+    if (e) { clearTimeout(e.timer); this.pending.delete(mid) }
+  }
+  // 是否可向某对端直发（在线 + 有地址/端口/公钥）
+  reachable (toId) {
+    const p = this.peers.get(toId)
+    return !!(p && p.online && p.address && p.uport && p.pub)
+  }
+  // 构造一条私聊本端回显（供 main 落库/展示）
+  privateEcho (mid, toId, text, opts) {
+    const m = this._echo(mid, 'private', toId, text, opts)
+    m.mid = mid
+    return m
+  }
+  // 按指定 mid 直发私聊（main 发件箱驱动）：不可达返回 ok:false；对端按 mid 去重；非阅后即焚跟踪 ACK
+  resendPrivate (toId, mid, text, opts) {
+    text = (text || '').toString()
+    const peer = this.peers.get(toId)
+    if (!peer || !peer.online || !peer.address || !peer.uport) return { ok: false, error: '对方离线,暂不可发送' }
+    if (!peer.pub) return { ok: false, error: '尚未拿到对方公钥(稍候重试)' }
+    const key = this._keyForPub(peer.pub)
+    if (!key) return { ok: false, error: '无法建立加密会话' }
+    const burn = !!(opts && opts.burn)
+    this._markSeen(mid)
+    this._clearPending(mid)
+    const enc = cryptoMod.encrypt(key, this._buildPlaintext(text, opts))
+    const pkt = this._encode({ t: 'msg', scope: 'private', from: this.id, to: toId, spub: this.pub, sport: this.uport, mid, ts: Date.now(), enc })
+    this.uniSock.send(pkt, peer.uport, peer.address, (err) => {
+      if (burn) return
+      if (err) { this._clearPending(mid); this.emit('msg-status', { mid, toId, status: 'failed' }) }
+      else this.emit('msg-status', { mid, toId, status: 'sent' })
+    })
+    if (!burn) this._trackAck(mid, toId, pkt)
+    return { ok: true }
+  }
+
+  // 广播一条群消息数据报；超过安全上限则跳过广播(交由 main 的可靠单播 sendRoomMember 补达)，避免 EMSGSIZE 被当瞬时错误静默丢弃
+  _broadcastMsg (pkt, label) {
+    if (!this.discSock) return false
+    if (pkt.length > SAFE_DATAGRAM_BYTES) {
+      console.warn('[p2p] %s 广播包过大(%d 字节 > %d)，跳过广播，改由单播补达', label || 'room', pkt.length, SAFE_DATAGRAM_BYTES)
+      return false
+    }
+    for (const addr of this._broadcastTargets()) this.discSock.send(pkt, this.discoveryPort, addr, () => {})
+    return true
   }
 
   sendRoom (room, text, opts) {
     text = (text || '').toString()
     if (!text.trim()) return { ok: false, error: '空消息' }
+    if (isTextTooLong(text)) return { ok: false, error: TEXT_TOO_LONG_ERR }
     if (!room || !room.id || !Array.isArray(room.members)) return { ok: false, error: '群聊不存在' }
     const mid = crypto.randomUUID()
     const ts = Date.now()
@@ -380,26 +495,35 @@ class P2P extends EventEmitter {
       count++
     }
     const pkt = this._encode({ t: 'msg', scope: 'room', roomId: room.id, from: this.id, spub: this.pub, sport: this.uport, mid, ts, enc })
-    if (this.discSock) for (const addr of this._broadcastTargets()) this.discSock.send(pkt, this.discoveryPort, addr, () => {})
+    this._broadcastMsg(pkt, 'room')
     return { ok: true, recipients: count, msg: this._echo(mid, 'room', null, text, { ...(opts || {}), room: roomMeta }) }
   }
 
-  sendPrivate (toId, text, opts) {
+  // 群聊离线补达：把一条群消息单发给某个(此前离线、现已上线)成员，并按 did=mid@member 跟踪 ACK。
+  // 由 main 的发件箱在该成员 presence 时调用，逻辑与私聊 resendPrivate 一致（单发 + ACK + 超时重发）。
+  // did 写入包内，接收端据此回执，使同一 mid 发往多个成员时各自的确认互不串号。
+  sendRoomMember (toId, room, mid, did, text, opts) {
     text = (text || '').toString()
-    if (!text.trim()) return { ok: false, error: '空消息' }
+    if (!room || !room.id) return { ok: false, error: '群聊不存在' }
     const peer = this.peers.get(toId)
     if (!peer || !peer.online || !peer.address || !peer.uport) return { ok: false, error: '对方离线,暂不可发送' }
     if (!peer.pub) return { ok: false, error: '尚未拿到对方公钥(稍候重试)' }
     const key = this._keyForPub(peer.pub)
     if (!key) return { ok: false, error: '无法建立加密会话' }
-    const mid = crypto.randomUUID()
-    const ts = Date.now()
     this._markSeen(mid)
-    const enc = cryptoMod.encrypt(key, this._buildPlaintext(text, opts))
-    const pkt = this._encode({ t: 'msg', scope: 'private', from: this.id, to: toId, spub: this.pub, sport: this.uport, mid, ts, enc })
-    this.uniSock.send(pkt, peer.uport, peer.address, () => {})
-    return { ok: true, msg: this._echo(mid, 'private', toId, text, opts) }
+    this._clearPending(did)
+    const roomMeta = { id: room.id, name: room.name || '群聊', ownerId: room.ownerId || '', members: room.members || [] }
+    const enc = { [toId]: cryptoMod.encrypt(key, this._buildPlaintext(text, { ...(opts || {}), room: roomMeta })) }
+    const pkt = this._encode({ t: 'msg', scope: 'room', roomId: room.id, from: this.id, to: toId, did, spub: this.pub, sport: this.uport, mid, ts: Date.now(), enc })
+    this.uniSock.send(pkt, peer.uport, peer.address, (err) => {
+      if (err) { this._clearPending(did); this.emit('msg-status', { mid: did, toId, status: 'failed' }) }
+      else this.emit('msg-status', { mid: did, toId, status: 'sent' })
+    })
+    this._trackAck(did, toId, pkt) // 接收端回执 mid=did → _onAck(pending.get(did)) → emit delivered{mid:did}
+    return { ok: true }
   }
+
+  // 私聊发送已改由 main 的持久化发件箱编排（见 resendPrivate / privateEcho / reachable）
 
   sendTyping (toId) {
     const peer = this.peers.get(toId)
@@ -436,9 +560,19 @@ class P2P extends EventEmitter {
 
   _signal (scope, toId, obj) {
     const pkt = this._encode(obj)
-    // 群聊(room)与全员广播一样走广播;非成员收到后因 mid 无匹配会自然忽略
-    if (scope === 'group' || scope === 'room') { if (this.discSock) for (const addr of this._broadcastTargets()) this.discSock.send(pkt, this.discoveryPort, addr, () => {}) }
-    else { const peer = this.peers.get(toId); if (peer && peer.online && peer.uport && peer.address) this.uniSock.send(pkt, peer.uport, peer.address, () => {}) }
+    // 群聊控制信号先广播，再对已知在线节点单播兜底；重复到达由上层按 from 去重。
+    if (scope === 'group' || scope === 'room') {
+      if (this.discSock) for (const addr of this._broadcastTargets()) this.discSock.send(pkt, this.discoveryPort, addr, () => {})
+      if (this.uniSock) {
+        for (const peer of this.peers.values()) {
+          if (!peer || !peer.online || !peer.uport || !peer.address || this.blacklist.has(peer.id)) continue
+          this.uniSock.send(pkt, peer.uport, peer.address, () => {})
+        }
+      }
+    } else {
+      const peer = this.peers.get(toId)
+      if (peer && peer.online && peer.uport && peer.address) this.uniSock.send(pkt, peer.uport, peer.address, () => {})
+    }
   }
   sendRecall (scope, toId, mid) {
     const obj = { t: 'recall', from: this.id, scope, mid }
@@ -458,7 +592,11 @@ class P2P extends EventEmitter {
   }
 
   stop () {
+    this._closing = true
+    if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null }
     this.sayBye()
+    for (const e of this.pending.values()) { try { clearTimeout(e.timer) } catch (_) {} }
+    this.pending.clear()
     for (const t of this.timers) clearInterval(t)
     this.timers = []
     try { this.discSock && this.discSock.close() } catch (_) {}
@@ -469,4 +607,4 @@ class P2P extends EventEmitter {
   }
 }
 
-module.exports = { P2P, DISCOVERY_PORT }
+module.exports = { P2P, DISCOVERY_PORT, MAX_TEXT_CHARS, isTextTooLong }
