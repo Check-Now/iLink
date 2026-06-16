@@ -128,4 +128,11 @@ function buildMarkdown (cfg, s, pass) {
   L.push('## 8. 消息重复情况', '- 重复 ' + v.duplicateCount + ' 条。' + (v.duplicateCount > 0 ? ' 可能触及去重窗口 SEEN_MAX=800 或重连后重复投递，建议核查。' : ' 去重正常。'), '')
   L.push('## 9. 消息乱序情况', '- 乱序到达 ' + v.outOfOrderCount + ' 条。说明：UDP 单播+重发天然可能乱序，当前协议无消息序号、无重排缓冲，属已知架构特性，按实测量化评估业务可接受度。', '')
   L.push('## 10. 延迟统计', '- 整体（含离线恢复）：平均 ' + v.avgLatencyMs + 'ms，P50 ' + v.p50LatencyMs + '，P95 ' + v.p95LatencyMs + '，P99 ' + v.p99LatencyMs + '，Max ' + v.maxLatencyMs + 'ms。', '- 实时发送 P95：单聊 ' + pass.pLat.p95 + 'ms，群聊 ' + pass.gLat.p95 + 'ms。', '- 注：单机回环延迟偏乐观，真实多机 LAN 需重新标定基线。', '')
-  L.push('## 11. 服务端资源使用情况（单进程聚合）', '- CPU：均值 ' + r.cpuPctAvg + '%，峰值 ' + r.cpuPctMax + '%', '- 内存 RSS：' + r.rssMBStart + 'MB -> ' + r.rssMBEnd + 'MB，峰值 ' + r.rssMBMax + 'MB（仅展示；含分配器保留的 socket/文件缓冲，非泄漏判据）', '- 堆 heapUsed：稳态 ' + (r.heapMBSteady != null ? r.heapMBSteady : '-') + 'MB -> 结束 ' + (r.heapMBEnd != null ? r.heapMBEnd : '-') + 'MB，峰值 ' + r.heapMBMax + 'MB（增长 ' + (pass.memGrowth * 100).toFixed(1) + '% ← 泄漏判据
+  L.push('## 11. 服务端资源使用情况（单进程聚合）', '- CPU：均值 ' + r.cpuPctAvg + '%，峰值 ' + r.cpuPctMax + '%', '- 内存 RSS：' + r.rssMBStart + 'MB -> ' + r.rssMBEnd + 'MB，峰值 ' + r.rssMBMax + 'MB（仅展示；含分配器保留的 socket/文件缓冲，非泄漏判据）', '- 堆 heapUsed：稳态 ' + (r.heapMBSteady != null ? r.heapMBSteady : '-') + 'MB -> 结束 ' + (r.heapMBEnd != null ? r.heapMBEnd : '-') + 'MB，峰值 ' + r.heapMBMax + 'MB（增长 ' + (pass.memGrowth * 100).toFixed(1) + '% ← 泄漏判据）', '- 说明：P2P 架构下"服务端资源"=单节点资源；全网为各节点之和。', '')
+  L.push('## 12. 发现的问题', (pass.checks.filter((c) => !c.pass).length ? pass.checks.filter((c) => !c.pass).map((c) => '- [FAIL] ' + c.name + '：实测 ' + c.value).join('\n') : '- 本次运行未发现违反通过标准的问题。'), (fileSc && fileSc.partLeftover ? '- [WARN] 残留 .part 临时文件 ' + fileSc.partLeftover + ' 个。' : ''), '')
+  L.push('## 13. 复现步骤', '```', 'cd <项目根>', 'node test/load/run.js', 'ILINK_LT_USER_COUNT=' + cfg.userCount + ' ILINK_LT_MSG_PER_USER=' + cfg.messagePerUser + ' node test/load/run.js', '# 报告：test/load/results/' + cfg.testRunId + '/', '```', '')
+  L.push('## 14. 建议修复方案', '- 重复(#8>0)：扩大去重窗口 SEEN_MAX 或改用 (sender,seq) 复合去重键。', '- 群丢失：纯广播 best-effort 段建议对在线成员也走 ACK/补达。', '- 乱序(#9)：业务对顺序敏感则加单调序号 + 接收端重排缓冲。', '- 文件高并发失败：评估 SOCKET_TIMEOUT_MS(30s) 是否被抢占误判。', '- 内存增长：关注 peers/keyCache/seen 在大规模长跑的回收。', '')
+  return L.join('\n')
+}
+
+module.exports = { writeReports, evaluatePass }

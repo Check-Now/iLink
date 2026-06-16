@@ -4,13 +4,14 @@
 // 协议(每帧 = 4字节大端长度 + 负载;长度 0 表示结束):
 //   帧1 明文握手 { v, from, spub, resume }  —— resume:true 表示发送端支持断点续传
 //   (接收端回)帧 明文 { resumeFrom: N }     —— 仅当发送端 resume 时回传;N=本地 .part 已收字节
-//   帧2 密文元数据 { mid, fname, size, mime, scope, to, name, sha256 }
+//   帧2 密文元数据 { mid, fname, size, mime, scope, to, name, sha256, share }
 //   帧3.. 密文文件分块(每块独立 AES-256-GCM；发送端从 resumeFrom 偏移开始读发)
 //   帧EOF 长度 0  —— 仅此帧表示“发送完毕”;未收到 EOF 即断开视为传输不完整
 // 断点续传:接收端保留未完成的 .part；同 mid 再次传输时回传已收字节，发送端从该偏移续发。
 // 完整性:收尾对整文件重算 SHA-256 并校验字节数(兼容续传)，任一不符则删 .part 报失败，绝不落盘。
 //   用户取消 / 校验失败 → 删除 .part；网络中断 → 保留 .part 供续传。
-// 兼容:发送端等 resumeFrom 帧 3s，旧接收端不回则从 0 全量发送；旧发送端无 resume 则接收端全新接收。
+// 兼容:发送端等 resumeFrom 帧 3s，旧接收端不回则从 0 全量发送;旧发送端无 resume 则接收端全新接收。
+// 群共享空间:sendFile 第10参 share 透传共享空间上下文(上传/下载)，随密文元数据下发，done 事件原样回传。
 
 const net = require('net')
 const fs = require('fs')
@@ -110,7 +111,7 @@ class FileTransfer extends EventEmitter {
     })
   }
 
-  sendFile (toId, filePath, scope, mid, metaTo, batch, sticker, msgMid, msgTs) {
+  sendFile (toId, filePath, scope, mid, metaTo, batch, sticker, msgMid, msgTs, share) {
     mid = mid || crypto.randomUUID()
     // metaTo:写入元数据的会话归属。私聊=对方 id;群聊(room)=群 id(否则接收端会归错会话)
     if (metaTo == null) metaTo = toId
@@ -137,7 +138,7 @@ class FileTransfer extends EventEmitter {
       this._writeFrame(socket, Buffer.from(JSON.stringify({ v: 1, from: this.id, spub: this.pub, resume: true }), 'utf8'))
       hashReady.then(() => {
         if (socket.destroyed) return
-        this._writeFrame(socket, cryptoMod.encryptBuf(key, Buffer.from(JSON.stringify({ mid, msgMid: msgMid || mid, fname, size, mime, scope: scope || 'private', to: metaTo, name: this.ownName(), batch: batch || null, sticker: !!sticker, ts: msgTs || null, sha256 }), 'utf8')))
+        this._writeFrame(socket, cryptoMod.encryptBuf(key, Buffer.from(JSON.stringify({ mid, msgMid: msgMid || mid, fname, size, mime, scope: scope || 'private', to: metaTo, name: this.ownName(), batch: batch || null, sticker: !!sticker, ts: msgTs || null, sha256, share: share || null }), 'utf8')))
         // 等接收端回传续传偏移；旧接收端不回，3s 超时后从 0 全量发送（兼容）
         let started = false; let rbuf = Buffer.alloc(0); let offsetTimer = null
         const startStream = (offset) => {
@@ -200,7 +201,7 @@ class FileTransfer extends EventEmitter {
         }
         const commit = () => {
           if (done) return; done = true
-          this.emit('done', { mid: meta.msgMid || meta.mid, transferMid: meta.mid, from, name: meta.name, fname: meta.fname, size: meta.size, mime: meta.mime, scope: meta.scope, to: meta.to, batch: meta.batch || null, sticker: !!meta.sticker, ts: meta.ts || null, tempPath })
+          this.emit('done', { mid: meta.msgMid || meta.mid, transferMid: meta.mid, from, name: meta.name, fname: meta.fname, size: meta.size, mime: meta.mime, scope: meta.scope, to: meta.to, batch: meta.batch || null, sticker: !!meta.sticker, ts: meta.ts || null, share: meta.share || null, tempPath })
         }
         if (!meta.sha256) return commit() // 旧发送端无 sha256：仅校验大小
         // 对完整 .part 重算 SHA-256（复用 _hashFile；兼容续传：增量哈希无法覆盖续传前已落盘部分）
@@ -256,9 +257,4 @@ class FileTransfer extends EventEmitter {
     })
     // 未收到 EOF 就断开 = 传输不完整：保留 .part 以便续传（finishing 期间是收尾校验，忽略）
     socket.on('end', () => { if (!done && !finishing && meta) fail(false) })
-    socket.on('error', () => { if (!done && !finishing) fail(false) })
-    socket.setTimeout(SOCKET_TIMEOUT_MS, () => { if (!done && !finishing) fail(false) })
-  }
-}
-
-module.exports = { FileTransfer, guessMime }
+    socke

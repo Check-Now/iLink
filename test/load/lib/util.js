@@ -75,3 +75,15 @@ class ResourceSampler {
       cpuPctMax: Math.max(...cpu),
       rssMBStart: rss[0],
       rssMBSteady: rss[steadyIdx],
+      rssMBEnd: rss[rss.length - 1],
+      rssMBMax: Math.max(...rss),
+      heapMBStart: heap[0],
+      heapMBSteady: heap[steadyIdx],
+      heapMBEnd: heap[heap.length - 1],
+      heapMBMax: Math.max(...heap),
+      samples: this.samples,
+    }
+  }
+}
+
+module.exports = { sleep, ensureDir, percentile, stats, toCsv, ResourceSampler, fs, path }

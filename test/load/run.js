@@ -86,4 +86,11 @@ async function main () {
 
   console.log('\n=== 结果 ===')
   console.log('计划发送 %d / 实际 %d / 应到达 %d / 收到 %d(唯一 %d)', verifyRes.plannedSendCount, verifyRes.actualSendCount, verifyRes.expectedDeliveries, verifyRes.receiverReceiveCount, verifyRes.uniqueReceivedCount)
-  console.log('丢失 %d (私聊 %d/群 %d) | 重复 %d | 乱序 %d | 错误 %d', verifyRes.lostCount, verifyRes.lostPrivate, verifyRes.lostRoom, verifyRes.duplicateCount, verifyRes.
+  console.log('丢失 %d (私聊 %d/群 %d) | 重复 %d | 乱序 %d | 错误 %d', verifyRes.lostCount, verifyRes.lostPrivate, verifyRes.lostRoom, verifyRes.duplicateCount, verifyRes.outOfOrderCount, verifyRes.errorCount)
+  console.log('延迟 avg %dms p95 %dms p99 %dms | ACK %d', verifyRes.avgLatencyMs, verifyRes.p95LatencyMs, verifyRes.p99LatencyMs, verifyRes.serverAckCount)
+  console.log('通过标准 %d/%d → %s', pass.passed, pass.total, pass.overall ? '✅ 全部通过' : '❌ 存在未通过')
+  console.log('报告目录：' + dir)
+  process.exit(pass.overall ? 0 : 1)
+}
+
+main().catch((e) => { console.error('压测异常：', e); process.exit(3) })

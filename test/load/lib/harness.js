@@ -137,4 +137,14 @@ class Harness {
   onlineCount () { return this.clients.filter((c) => c.online).length }
 
   // 全网仍在等待 ACK 的消息数（用于收尾恢复期判断是否已静默）
-  pendingAckCount () { let n = 0; for (const c of this.clients) n += (c.pending ? c.pending.size : 0); ret
+  pendingAckCount () { let n = 0; for (const c of this.clients) n += (c.pending ? c.pending.size : 0); return n }
+
+  stopAll () {
+    if (this._hbTimer) clearInterval(this._hbTimer)
+    this._hbTimer = null
+    this.sampler.stop()
+    for (const c of this.clients) c.stop()
+  }
+}
+
+module.exports = { Harness }

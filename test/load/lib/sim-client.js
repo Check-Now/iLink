@@ -152,4 +152,32 @@ class SimClient {
     this.online = false
     for (const t of p.timers) clearInterval(t)
     p.timers = []
-    try { p.discSock && p.discSock.close() } c
+    try { p.discSock && p.discSock.close() } catch (_) {}
+    try { p.uniSock && p.uniSock.close() } catch (_) {}
+    p.discSock = null; p.uniSock = null; p.started = false
+  }
+
+  // ---- 自动重连（重建 socket；uport 会变，需 harness 重新注入）----
+  reconnectUp () {
+    return new Promise((resolve) => {
+      const p = this.p2p
+      p.once('ready', () => { this.online = true; resolve() })
+      p.start()
+    })
+  }
+
+  // ---- 文件传输节点 ----
+  startFile (resolvePeer) {
+    return new Promise((resolve) => {
+      this.ft = new FileTransfer({ id: this.id, pub: this.pub, priv: this.priv, resolvePeer, ownName: () => this.name })
+      this.ft.start((port) => { this.tport = port; resolve(port) })
+    })
+  }
+
+  stop () {
+    try { this.p2p && this.p2p.stop() } catch (_) {}
+    try { this.ft && this.ft.stop() } catch (_) {}
+  }
+}
+
+module.exports = { SimClient }

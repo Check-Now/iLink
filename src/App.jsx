@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Users, User, Send, Pencil, Check, ShieldCheck, Lock, Settings, X, Flame, EyeOff, Minus, Plus, Sun, Monitor, Info, Search, Smile, Paperclip, File as FileIcon, Reply, Undo2, Forward, Pin, Bell, BellOff, Trash2, Hand, Upload, Image as ImageIcon, Type, RefreshCw, CircleHelp, Network, UserPlus, Crown, ChevronDown, Copy, Camera, History, CheckCheck, Clock, AlertCircle } from 'lucide-react'
+import { Users, User, Send, Pencil, Check, ShieldCheck, Lock, Settings, X, Flame, EyeOff, Minus, Plus, Sun, Monitor, Info, Search, Smile, Paperclip, File as FileIcon, Reply, Undo2, Forward, Pin, Bell, BellOff, Trash2, Hand, Upload, Image as ImageIcon, Type, RefreshCw, CircleHelp, Network, UserPlus, Crown, ChevronDown, Copy, Camera, History, CheckCheck, Clock, AlertCircle, Folder, FolderPlus, Download, ArrowLeft, ChevronRight, MoreVertical, HardDrive, FolderOpen, WifiOff } from 'lucide-react'
 
 const api = window.api
 const FIELD = 'field w-full rounded-lg px-3 py-2 text-sm outline-none'
@@ -1463,6 +1463,321 @@ function ShotScreen () {
   )
 }
 
+// ============ 群共享空间面板（极简展示，详情走悬浮提示）============
+function fmtShareTime (ts) {
+  if (!ts) return ''
+  const d = new Date(ts); const p = (n) => String(n).padStart(2, '0')
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes())
+}
+
+function ShareHistoryDialog ({ space, entry, onClose, onDownload }) {
+  const [data, setData] = useState(null)
+  const [busy, setBusy] = useState('')
+  useEffect(() => { let on = true; api.share.history(space.spaceId, entry.entryId).then((r) => { if (on) setData(r) }); return () => { on = false } }, [space.spaceId, entry.entryId])
+  return (
+    <Overlay onClose={onClose}>
+      <div className="w-[460px] glass-panel rounded-2xl p-5">
+        <div className="flex items-center justify-between mb-3">
+          <div className="text-sm font-semibold txt truncate">历史版本 · {entry.name}</div>
+          <button onClick={onClose} className="icon-btn"><X size={15} /></button>
+        </div>
+        {!data ? <div className="text-xs txt-dim py-6 text-center">加载中…</div>
+          : !data.ok ? <div className="text-xs text-red-500 py-6 text-center">{data.error || '无法获取'}</div>
+            : (
+              <div className="max-h-80 overflow-auto divide-y bd-soft">
+                {data.versions.map((v) => (
+                  <div key={v.versionId} className="flex items-center gap-2 py-2 text-xs" title={'SHA-256: ' + v.fileHash + '\n上传者: ' + v.uploadedBy + '\n时间: ' + fmtShareTime(v.uploadedAt)}>
+                    <span className="w-10 shrink-0 accent-txt font-medium">{v.versionNo === 0 ? '原始' : 'V' + String(v.versionNo).padStart(2, '0')}</span>
+                    <span className="flex-1 min-w-0 truncate">{v.versionFileName}</span>
+                    <span className="txt-dim shrink-0">{fmtSize(v.fileSize)}</span>
+                    <button disabled={busy === v.versionId} onClick={async () => { setBusy(v.versionId); await onDownload(entry, v.versionId); setBusy('') }} className="icon-btn shrink-0" title="下载此版本"><Download size={14} /></button>
+                  </div>
+                ))}
+              </div>
+            )}
+      </div>
+    </Overlay>
+  )
+}
+
+// Electron 渲染进程不支持 window.prompt，统一用应用内输入框
+function ShareInputDialog ({ title, placeholder, initial, onOk, onClose }) {
+  const [v, setV] = useState(initial || '')
+  const submit = () => { if (v.trim()) { onOk(v.trim()); onClose() } }
+  return (
+    <Overlay onClose={onClose}>
+      <div className="w-80 glass-panel rounded-2xl p-5">
+        <div className="text-sm font-semibold txt mb-3">{title}</div>
+        <input autoFocus value={v} placeholder={placeholder || ''} onChange={(e) => setV(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') submit() }} className={FIELD} />
+        <div className="mt-4 flex justify-end gap-2">
+          <button onClick={onClose} className="btn-ghost text-xs rounded-lg px-3 py-1.5">取消</button>
+          <button onClick={submit} className="btn-primary text-xs rounded-lg px-3 py-1.5">确定</button>
+        </div>
+      </div>
+    </Overlay>
+  )
+}
+
+function ShareSpacePanel ({ room, self, peers, nameById, onClose }) {
+  const [spaces, setSpaces] = useState([])
+  const [space, setSpace] = useState(null)
+  const [parentId, setParentId] = useState('root')
+  const [dir, setDir] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [msg, setMsg] = useState('')
+  const [creating, setCreating] = useState(false)
+  const [newName, setNewName] = useState('')
+  const [newDir, setNewDir] = useState('')
+  const [history, setHistory] = useState(null)
+  const [sortKey, setSortKey] = useState('name')
+  const [search, setSearch] = useState('')
+  const [menu, setMenu] = useState(null)
+  const [conflict, setConflict] = useState(null)
+  const [inputDlg, setInputDlg] = useState(null)
+  const queueRef = useRef([])
+  const spaceRef = useRef(null); spaceRef.current = space
+  const parentRef = useRef('root'); parentRef.current = parentId
+
+  const nameOf = (id) => (id === (self && self.id) ? '我' : ((nameById && nameById[id]) || (peers.find((p) => p.id === id) || {}).name || String(id || '').slice(0, 6)))
+
+  async function refreshSpaces () { const list = await api.share.list(room.id); setSpaces(list || []) }
+  useEffect(() => { refreshSpaces() }, [room.id])
+  useEffect(() => {
+    const un = api.share.onChanged(() => { refreshSpaces(); if (spaceRef.current) loadDir(spaceRef.current, parentRef.current, true) })
+    const un2 = api.share.onDownloaded((d) => setMsg('已下载：' + d.fname))
+    const un3 = api.share.onDownloadFailed((d) => setMsg('下载失败：' + (d.error || '')))
+    return () => { un && un(); un2 && un2(); un3 && un3() }
+  }, [])
+
+  async function loadDir (sp, pid, silent) {
+    if (!silent) { setLoading(true); setMsg('') }
+    const r = await api.share.dir(sp.spaceId, pid)
+    setLoading(false)
+    if (r && (r.ok || r.entries)) { setDir(r); setParentId(r.parentId || pid) }
+    else { setDir({ entries: [], breadcrumb: [{ entryId: 'root', name: '根目录' }], offline: r && r.offline, error: r && r.error }); if (r && r.error && !silent) setMsg(r.error) }
+  }
+  function openSpace (sp) { setSpace(sp); setParentId('root'); setSearch(''); loadDir(sp, 'root') }
+  function back () { const bc = dir && dir.breadcrumb; if (bc && bc.length > 1) loadDir(space, bc[bc.length - 2].entryId) }
+
+  async function createSpace () {
+    const n = newName.trim()
+    if (!n) { setMsg('请输入空间名称'); return }
+    const r = await api.share.create(room.id, n, newDir || undefined)
+    if (r && r.ok) { setCreating(false); setNewName(''); setNewDir(''); refreshSpaces(); openSpace(r.space) }
+    else setMsg((r && r.error) || '创建失败')
+  }
+  async function chooseHostDir () { const r = await api.share.chooseDir(); if (r && r.ok) setNewDir(r.dir) }
+
+  function newFolder () {
+    setInputDlg({ title: '新建文件夹', placeholder: '文件夹名称', value: '', onOk: async (name) => {
+      const r = await api.share.createFolder(space.spaceId, parentId, name)
+      if (r && r.ok) { setMsg('文件夹已创建'); loadDir(space, parentId, true) } else setMsg((r && r.error) || '创建失败')
+    } })
+  }
+  async function processQueue () {
+    const q = queueRef.current
+    while (q.length) {
+      const p = q[0]
+      const r = await api.share.upload(space.spaceId, parentId, [p], 'new')
+      const res = r && r.results && r.results[0]
+      if (res && res.conflict) { setConflict({ path: p, entryId: res.entryId, name: res.name }); return }
+      q.shift()
+      if (res && !res.ok && !res.conflict) setMsg('上传失败：' + (res.error || res.offline && '主机离线' || ''))
+    }
+    setConflict(null); loadDir(space, parentId, true); setMsg('上传完成')
+  }
+  async function uploadFiles () {
+    const r = await api.share.pickFiles()
+    if (!r || !r.ok) return
+    queueRef.current = r.paths.slice(); setMsg('上传中…'); processQueue()
+  }
+  async function uploadFolder () {
+    const r = await api.share.pickFolder()
+    if (!r || !r.ok) return
+    setMsg('上传文件夹中…')
+    const res = await api.share.uploadFolder(space.spaceId, parentId, r.path)
+    if (res && res.ok) setMsg('文件夹上传完成（' + res.summary.folders + ' 目录 / ' + res.summary.files + ' 文件）')
+    else setMsg('文件夹上传：' + ((res && res.error) || (res && res.summary && ('部分失败 ' + res.summary.failed + ' 项')) || '失败'))
+    loadDir(space, parentId, true)
+  }
+  async function resolveConflict (mode) {
+    const c = conflict; setConflict(null)
+    if (mode === 'version') await api.share.upload(space.spaceId, parentId, [c.path], 'version', c.entryId)
+    else if (mode === 'rename') await api.share.upload(space.spaceId, parentId, [c.path], 'new', null, true)
+    queueRef.current.shift()
+    processQueue()
+  }
+  async function download (entry, versionId) {
+    setMsg('下载中…')
+    const r = await api.share.download(space.spaceId, entry.entryId, versionId)
+    if (r && r.ok) setMsg('已下载：' + (r.fname || entry.name)); else setMsg('下载失败：' + ((r && r.error) || ''))
+  }
+  async function uploadVersion (entry) {
+    const r = await api.share.pickFiles()
+    if (!r || !r.ok) return
+    setMsg('上传新版本…')
+    const res = await api.share.upload(space.spaceId, parentId, [r.paths[0]], 'version', entry.entryId)
+    const one = res && res.results && res.results[0]
+    if (one && one.ok) { setMsg('新版本已上传：' + one.version.versionFileName); loadDir(space, parentId, true) } else setMsg('上传失败：' + ((one && one.error) || ''))
+  }
+  function rename (entry) {
+    setInputDlg({ title: '重命名', placeholder: '新名称', value: entry.name, onOk: async (nn) => {
+      const r = await api.share.rename(space.spaceId, entry.entryId, nn)
+      if (r && r.ok) { setMsg('已重命名'); loadDir(space, parentId, true) } else setMsg((r && r.error) || '重命名失败')
+    } })
+  }
+  async function remove (entry) {
+    if (!window.confirm('删除「' + entry.name + '」？将移入回收站（可在主机本地恢复）')) return
+    const r = await api.share.remove(space.spaceId, entry.entryId)
+    if (r && r.ok) { setMsg('已删除'); loadDir(space, parentId, true) } else setMsg((r && r.error) || '删除失败')
+  }
+
+  const sorted = useMemo(() => {
+    let list = (dir && dir.entries) || []
+    if (search.trim()) { const q = search.trim().toLowerCase(); list = list.filter((e) => e.name.toLowerCase().includes(q)) }
+    const dirsFirst = (a, b) => (a.type === b.type ? 0 : a.type === 'folder' ? -1 : 1)
+    list = list.slice().sort((a, b) => dirsFirst(a, b) || (
+      sortKey === 'size' ? (b.size || 0) - (a.size || 0)
+        : sortKey === 'time' ? (b.updatedAt || 0) - (a.updatedAt || 0)
+          : sortKey === 'type' ? String(a.ext).localeCompare(String(b.ext))
+            : a.name.localeCompare(b.name, 'zh')))
+    return list
+  }, [dir, search, sortKey])
+
+  // ---------- 列表页（未进入空间）----------
+  if (!space) {
+    return (
+      <Overlay onClose={onClose}>
+        <div className="w-[560px] glass-panel rounded-2xl p-5">
+          <div className="flex items-center justify-between mb-3">
+            <div className="text-sm font-semibold txt flex items-center gap-2"><HardDrive size={16} className="accent-txt" /> 共享空间 · {room.name}</div>
+            <div className="flex items-center gap-1">
+              <button onClick={() => setCreating((v) => !v)} className="icon-btn" title="新建共享空间"><Plus size={16} /></button>
+              <button onClick={onClose} className="icon-btn"><X size={15} /></button>
+            </div>
+          </div>
+          {creating && (
+            <div className="mb-3 p-3 rounded-xl bd-soft border space-y-2">
+              <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="共享空间名称" className={FIELD} />
+              <div className="flex items-center gap-2">
+                <button onClick={chooseHostDir} className="btn-ghost text-xs rounded-lg px-2 py-1.5 shrink-0" title="可选：自定义本机存储目录，默认应用数据目录">选择存储目录</button>
+                <span className="text-[11px] txt-dim truncate flex-1" title={newDir}>{newDir || '默认：应用数据目录 group_shares/'}</span>
+              </div>
+              <div className="text-[11px] txt-dim">创建后你的电脑将成为该空间的共享主机，数据存储在本机。</div>
+              <div className="flex justify-end gap-2">
+                <button onClick={() => setCreating(false)} className="btn-ghost text-xs rounded-lg px-3 py-1.5">取消</button>
+                <button onClick={createSpace} className="btn-primary text-xs rounded-lg px-3 py-1.5">创建</button>
+              </div>
+            </div>
+          )}
+          {msg && <div className="mb-2 text-[11px] accent-txt">{msg}</div>}
+          {!spaces.length ? <div className="text-xs txt-dim py-8 text-center">还没有共享空间，点击右上角 + 创建</div>
+            : (
+              <div className="space-y-1.5 max-h-[60vh] overflow-auto">
+                {spaces.map((sp) => (
+                  <div key={sp.spaceId} className="flex items-center gap-3 p-2.5 rounded-xl hover:bg-black/5 bd-soft border" title={'创建者: ' + nameOf(sp.createdBy) + '\n共享主机: ' + nameOf(sp.hostUserId) + '\n主机设备: ' + (sp.hostDeviceId || '-') + '\n创建时间: ' + fmtShareTime(sp.createdAt)}>
+                    <Folder size={26} className={sp.online ? 'accent-txt' : 'txt-dim'} />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5 text-sm font-medium truncate">{sp.name}
+                        {sp.online ? <span className="text-[10px] px-1.5 rounded-full bg-green-500/15 text-green-600">在线</span>
+                          : <span className="text-[10px] px-1.5 rounded-full bg-gray-400/15 txt-dim inline-flex items-center gap-0.5"><WifiOff size={9} />离线</span>}
+                      </div>
+                      <div className="text-[11px] txt-dim truncate">主机 {nameOf(sp.hostUserId)} · {sp.fileCount || 0} 文件 · {fmtShareTime(sp.updatedAt) || '—'}</div>
+                    </div>
+                    {(sp.hostUserId === (self && self.id) || (room.ownerId === (self && self.id))) && <button onClick={async () => { if (window.confirm('删除共享空间「' + sp.name + '」？')) { await api.share.deleteSpace(sp.spaceId); refreshSpaces() } }} className="icon-btn shrink-0" title="删除空间"><Trash2 size={14} /></button>}
+                    <button onClick={() => openSpace(sp)} disabled={!sp.online} className="text-xs btn-primary rounded-lg px-3 py-1.5 shrink-0 disabled:opacity-40">进入</button>
+                  </div>
+                ))}
+              </div>
+            )}
+        </div>
+      </Overlay>
+    )
+  }
+
+  // ---------- 目录页（已进入空间）----------
+  const bc = (dir && dir.breadcrumb) || [{ entryId: 'root', name: '根目录' }]
+  return (
+    <Overlay onClose={onClose}>
+      <div className="w-[680px] h-[78vh] glass-panel rounded-2xl p-4 flex flex-col" onClick={() => setMenu(null)}>
+        <div className="flex items-center gap-2 mb-2">
+          <button onClick={() => { setSpace(null); setDir(null) }} className="icon-btn" title="返回空间列表"><ArrowLeft size={16} /></button>
+          <div className="text-sm font-semibold txt flex items-center gap-1.5 min-w-0"><Folder size={15} className="accent-txt shrink-0" /><span className="truncate">{space.name}</span></div>
+          {dir && dir.offline && <span className="text-[10px] px-1.5 rounded-full bg-amber-500/15 text-amber-600 shrink-0" title="共享主机离线，展示的是本地缓存快照，可能不是最新">缓存数据，可能不是最新</span>}
+          <div className="flex-1" />
+          <button onClick={() => loadDir(space, parentId)} className="icon-btn" title="刷新"><RefreshCw size={15} /></button>
+          <button onClick={onClose} className="icon-btn"><X size={15} /></button>
+        </div>
+
+        <div className="flex items-center gap-1 text-[12px] txt-dim mb-2 flex-wrap">
+          {bc.map((c, i) => (
+            <span key={c.entryId} className="inline-flex items-center gap-1">
+              {i > 0 && <ChevronRight size={12} className="opacity-50" />}
+              <button onClick={() => loadDir(space, c.entryId)} className={'hover:underline ' + (i === bc.length - 1 ? 'accent-txt font-medium' : '')}>{c.name}</button>
+            </span>
+          ))}
+        </div>
+
+        <div className="flex items-center gap-1.5 mb-2">
+          <button onClick={back} disabled={bc.length <= 1} className="btn-ghost text-xs rounded-lg px-2 py-1.5 disabled:opacity-40 inline-flex items-center gap-1"><ArrowLeft size={13} />上级</button>
+          <button onClick={newFolder} disabled={dir && dir.offline} className="btn-ghost text-xs rounded-lg px-2 py-1.5 disabled:opacity-40 inline-flex items-center gap-1"><FolderPlus size={13} />新建文件夹</button>
+          <button onClick={uploadFiles} disabled={dir && dir.offline} className="btn-ghost text-xs rounded-lg px-2 py-1.5 disabled:opacity-40 inline-flex items-center gap-1"><Upload size={13} />上传文件</button>
+          <button onClick={uploadFolder} disabled={dir && dir.offline} className="btn-ghost text-xs rounded-lg px-2 py-1.5 disabled:opacity-40 inline-flex items-center gap-1"><FolderOpen size={13} />上传文件夹</button>
+          <div className="flex-1" />
+          <select value={sortKey} onChange={(e) => setSortKey(e.target.value)} className="field text-xs rounded-lg px-1.5 py-1.5" title="排序">
+            <option value="name">名称</option><option value="type">类型</option><option value="size">大小</option><option value="time">修改时间</option>
+          </select>
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="搜索" className="field text-xs rounded-lg px-2 py-1.5 w-24" />
+        </div>
+
+        {msg && <div className="mb-1.5 text-[11px] accent-txt truncate" title={msg}>{msg}</div>}
+
+        <div className="flex-1 min-h-0 overflow-auto rounded-xl bd-soft border divide-y">
+          {loading ? <div className="text-xs txt-dim py-10 text-center">加载中…</div>
+            : dir && dir.offline && !dir.entries.length ? <div className="text-xs txt-dim py-10 text-center"><WifiOff size={22} className="mx-auto mb-2 opacity-60" />共享主机离线，暂时不可访问</div>
+              : !sorted.length ? <div className="text-xs txt-dim py-10 text-center">空目录</div>
+                : sorted.map((e) => (
+                  <div key={e.entryId} className="flex items-center gap-2.5 px-3 py-2 text-xs hover:bg-black/5"
+                    title={e.type === 'file' ? ('大小: ' + fmtSize(e.size) + '\n版本: ' + (e.currentVersion === 0 ? '原始' : 'V' + String(e.currentVersion).padStart(2, '0')) + '（共 ' + e.versionCount + ' 版）\n更新者: ' + nameOf(e.updatedBy) + '\n更新: ' + fmtShareTime(e.updatedAt) + '\nSHA-256: ' + (e.hash || '').slice(0, 24) + '…') : ('创建者: ' + nameOf(e.createdBy) + '\n创建: ' + fmtShareTime(e.createdAt))}>
+                    {e.type === 'folder'
+                      ? <button onClick={() => loadDir(space, e.entryId)} className="flex items-center gap-2.5 flex-1 min-w-0 text-left"><Folder size={18} className="accent-txt shrink-0" /><span className="truncate font-medium">{e.name}</span></button>
+                      : <div className="flex items-center gap-2.5 flex-1 min-w-0"><FileIcon size={18} className="txt-dim shrink-0" /><span className="truncate">{e.name}</span>{e.currentVersion > 0 && <span className="text-[10px] px-1 rounded bg-blue-500/15 text-blue-600 shrink-0">V{String(e.currentVersion).padStart(2, '0')}</span>}</div>}
+                    <span className="txt-dim shrink-0 w-16 text-right">{e.type === 'file' ? fmtSize(e.size) : ''}</span>
+                    <span className="txt-dim shrink-0 w-24 text-right hidden sm:block">{fmtShareTime(e.updatedAt)}</span>
+                    <button onClick={(ev) => { ev.stopPropagation(); setMenu(menu && menu.id === e.entryId ? null : { id: e.entryId, entry: e }) }} className="icon-btn shrink-0 relative"><MoreVertical size={14} />
+                      {menu && menu.id === e.entryId && (
+                        <div className="absolute right-0 top-7 z-40 w-32 glass-panel rounded-lg py-1 text-left text-xs shadow-lg" onClick={(ev) => ev.stopPropagation()}>
+                          {e.type === 'file' && <button onClick={() => { setMenu(null); download(e, null) }} className="w-full px-3 py-1.5 hover:bg-black/5 flex items-center gap-2"><Download size={13} />下载</button>}
+                          {e.type === 'file' && !(dir && dir.offline) && <button onClick={() => { setMenu(null); uploadVersion(e) }} className="w-full px-3 py-1.5 hover:bg-black/5 flex items-center gap-2"><Upload size={13} />上传新版本</button>}
+                          {e.type === 'file' && <button onClick={() => { setMenu(null); setHistory(e) }} className="w-full px-3 py-1.5 hover:bg-black/5 flex items-center gap-2"><History size={13} />历史版本</button>}
+                          {!(dir && dir.offline) && <button onClick={() => { setMenu(null); rename(e) }} className="w-full px-3 py-1.5 hover:bg-black/5 flex items-center gap-2"><Pencil size={13} />重命名</button>}
+                          {!(dir && dir.offline) && <button onClick={() => { setMenu(null); remove(e) }} className="w-full px-3 py-1.5 hover:bg-black/5 flex items-center gap-2 text-red-500"><Trash2 size={13} />删除</button>}
+                        </div>
+                      )}
+                    </button>
+                  </div>
+                ))}
+        </div>
+      </div>
+      {history && <ShareHistoryDialog space={space} entry={history} onClose={() => setHistory(null)} onDownload={download} />}
+      {inputDlg && <ShareInputDialog title={inputDlg.title} placeholder={inputDlg.placeholder} initial={inputDlg.value} onOk={inputDlg.onOk} onClose={() => setInputDlg(null)} />}
+      {conflict && (
+        <Overlay onClose={() => { setConflict(null); queueRef.current.shift(); processQueue() }}>
+          <div className="w-80 glass-panel rounded-2xl p-5">
+            <div className="text-sm font-semibold txt">同名文件已存在</div>
+            <div className="mt-2 text-xs txt-dim leading-relaxed">「{conflict.name}」已存在。请选择处理方式（不会覆盖原文件）：</div>
+            <div className="mt-4 flex flex-col gap-2">
+              <button onClick={() => resolveConflict('version')} className="btn-primary text-xs rounded-lg px-3 py-2">作为新版本上传（生成 _VXX）</button>
+              <button onClick={() => resolveConflict('rename')} className="btn-ghost text-xs rounded-lg px-3 py-2">改名为新文件</button>
+              <button onClick={() => { setConflict(null); queueRef.current.shift(); processQueue() }} className="btn-ghost text-xs rounded-lg px-3 py-2">跳过此文件</button>
+            </div>
+          </div>
+        </Overlay>
+      )}
+    </Overlay>
+  )
+}
+
 function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
   const standalone = !!standaloneConv
   const [self, setSelf] = useState(null)
@@ -1554,6 +1869,7 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
   const [groupName, setGroupName] = useState('')
   const [groupMembers, setGroupMembers] = useState({})
   const [groupManage, setGroupManage] = useState(null)
+  const [sharePanel, setSharePanel] = useState(false) // 群共享空间面板
   const [sideTab, setSideTab] = useState('all')
   const [sideQuery, setSideQuery] = useState('') // 会话列表搜索，仅前端过滤展示
   const [atBottom, setAtBottom] = useState(true)
@@ -1822,6 +2138,7 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
     pushMsg(convId, m)
     if (m.self) return // 自己操作产生的系统消息进入会话，但不计未读、不弹通知
     if (m.system === 'avatar-changed') return // 群头像更新只保留聊天框内文字，不计未读、不弹通知
+    if (typeof m.system === 'string' && m.system.indexOf('share-') === 0) return // 共享空间广播只在聊天框展示，不计未读、不弹通知
     if (convId === activeRef.current) bumpRead(convId, m.ts || Date.now()) // 活动会话即时已读；非活动会话未读由派生自动计数
     // 这里仅处理会话状态，系统通知由主进程负责
   }
@@ -2691,6 +3008,7 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
             ) : (
               <span className="inline-flex items-center gap-2 flex-1 min-w-0 txt-dim"><User size={15} /> <span className="truncate">选择左侧会话开始聊天</span></span>
             )}
+            {activeRoom && <button onClick={() => setSharePanel(true)} title="共享空间" className="icon-btn shrink-0"><HardDrive size={16} /></button>}
             {active && <button onClick={() => setHistoryOpen(true)} title="聊天记录" className={'icon-btn shrink-0 ' + (historyOpen ? 'accent-txt' : '')}><History size={16} /></button>}
             {active && <button onClick={() => setSearchPane((v) => (v ? false : 'chat'))} title="搜索聊天" className={'icon-btn shrink-0 ' + (searchPane ? 'accent-txt' : '')}><Search size={16} /></button>}
           </div>
@@ -2868,302 +3186,4 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
                 {shotOpen && (
                   <div ref={shotPanelRef} className="absolute bottom-full left-0 z-20 mb-1.5 rounded-xl p-1.5 w-44 shadow-xl" style={{ background: 'rgb(var(--panel-rgb))', border: '1px solid var(--border-hi)' }}>
                     <button onClick={() => takeShot('full')} className="side-item w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-left"><Monitor size={13} /> 截取屏幕</button>
-                    <button onClick={() => takeShot('hide')} className="side-item w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-left"><EyeOff size={13} /> 隐藏窗口截图</button>
-                  </div>
-                )}
-              </span>
-              {/* 表情按钮与面板：面板展示在图标正上方 */}
-              <span className="relative">
-                <button ref={emojiBtnRef} onClick={() => { setEmojiOpen((v) => !v); setFontOpen(false); setShotOpen(false) }} className={'btn-ghost inline-flex items-center gap-1 px-2 py-1 rounded-md ' + (emojiOpen ? 'accent-txt' : '')}><Smile size={14} /></button>
-                {emojiOpen && (
-                  <div ref={emojiPanelRef} className="absolute bottom-full left-0 z-20 mb-1.5 glass-panel rounded-xl p-2" style={{ width: 300 }}>
-                    {/* Emoji 与表情包同层级标签 */}
-                    <div className="flex items-center gap-1 mb-1.5">
-                      <button onClick={() => setEmojiTab('emoji')} className={'text-[11px] rounded-lg px-2 py-1 ' + (emojiTab === 'emoji' ? 'btn-primary' : 'btn-ghost')}>Emoji</button>
-                      <button onClick={() => { setEmojiTab('sticker'); loadStickers() }} className={'text-[11px] rounded-lg px-2 py-1 ' + (emojiTab === 'sticker' ? 'btn-primary' : 'btn-ghost')}>表情包</button>
-                      {emojiTab === 'sticker' && <button onClick={importStickers} className="ml-auto btn-ghost text-[11px] rounded-lg px-2 py-1 inline-flex items-center gap-1"><Upload size={11} /> 导入</button>}
-                    </div>
-                    {emojiTab === 'emoji' ? (
-                      <div className="grid grid-cols-8 gap-1">
-                        {/* key 带索引：EMOJIS 中存在重复表情，纯字符 key 重复会导致切换标签时渲染错位 */}
-                        {EMOJIS.map((e, i) => <button key={i + e} onClick={() => { setText((t) => t + e); setEmojiOpen(false) }} className="text-lg rounded hover:bg-white/10">{e}</button>)}
-                      </div>
-                    ) : (
-                      <div className="max-h-60 overflow-auto scroll grid grid-cols-4 gap-1.5">
-                        {stickers.map((s) => (
-                          <button
-                            key={s.id}
-                            onClick={() => sendSticker(s)}
-                            onContextMenu={(e) => { e.preventDefault(); removeSticker(s.id) }}
-                            title="点击发送 · 右键删除"
-                            className="rounded-lg hover:bg-white/10 p-1"
-                          >
-                            <StaticImg src={s.dataUrl} alt="" className="w-full h-14 object-contain" />
-                          </button>
-                        ))}
-                        {stickers.length === 0 && <div className="col-span-4 text-[11px] txt-dim text-center py-5">还没有表情包，点右上角"导入"添加图片（支持 GIF）</div>}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </span>
-              <button onClick={attachFiles} disabled={!canAttachActive} title="发送文件" className="btn-ghost inline-flex items-center gap-1 px-2 py-1 rounded-md disabled:opacity-40"><Paperclip size={14} /></button>
-              <button onClick={() => { setSelectMode((v) => !v); setSelected({}) }} title="多选转发" className={'inline-flex items-center gap-1 px-2 py-1 rounded-md border transition ' + (selectMode ? 'border-emerald-500/50 accent-txt' : 'btn-ghost')}><Forward size={13} /></button>
-              {selectMode && <button onClick={() => setForwardOpen(true)} disabled={!Object.keys(selected).length} className="btn-primary text-xs rounded px-2 py-1 disabled:opacity-40">转发 {Object.keys(selected).length || ''}</button>}
-              {activePeer && (
-                <span className="relative" onMouseEnter={openNudgeHover} onMouseLeave={closeNudgeHover}>
-                  <button onClick={nudgeActive} disabled={!activePeer.online} title={activePeer.online ? '' : '对方离线'} className="btn-ghost inline-flex items-center gap-1 px-2 py-1 rounded-md disabled:opacity-40"><Hand size={14} /> 戳一戳</button>
-                  {/* 戳一戳自定义文字面板 */}
-                  {nudgeHover && (
-                    <div className="absolute bottom-full left-0 z-20 pb-1.5" onMouseEnter={openNudgeHover}>
-                      <div className="rounded-xl p-2 w-56 shadow-xl" style={{ background: 'rgb(var(--panel-rgb))', border: '1px solid var(--border-hi)' }}>
-                        <div className="text-[10px] txt-dim mb-1">自定义戳一戳附带文字</div>
-                        <input
-                          value={nudgeDraft}
-                          maxLength={20}
-                          onChange={(e) => setNudgeDraft(e.target.value.slice(0, 20))}
-                          onBlur={commitNudgeText}
-                          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitNudgeText() } }}
-                          placeholder="最多 20 个字符"
-                          className="field w-full rounded-lg px-2 py-1 text-xs"
-                        />
-                      </div>
-                    </div>
-                  )}
-                </span>
-              )}
-              <button onClick={() => setBurnOn((v) => !v)} disabled={!canBurnActive} title={canBurnActive ? ('阅后即焚，' + burnTtl + ' 秒后删除') : '对方离线，阅后即焚不可用'} className={'inline-flex items-center gap-1 px-2 py-1 rounded-full border transition disabled:opacity-40 ' + (burnOn && canBurnActive ? 'burn-on' : 'btn-ghost')}><Flame size={13} /> 即焚 {burnOn && canBurnActive ? '开' : '关'}</button>
-              <span className="ml-auto shrink-0 inline-flex items-center gap-2.5">
-                {activeDraft && <span className="txt-dim text-[10.5px]">草稿已保存</span>}
-                <span className="composer-hint">
-                  <kbd>{(settings.sendKey || 'enter') === 'ctrlEnter' ? 'Ctrl+Enter' : 'Enter'}</kbd> 发送
-                  <span className="opacity-50">·</span>
-                  <kbd>{(settings.sendKey || 'enter') === 'ctrlEnter' ? 'Enter' : 'Shift+Enter'}</kbd> 换行
-                </span>
-              </span>
-            </div>
-            <div className="composer-input-wrap flex items-end gap-2">
-              <textarea ref={composerRef} value={text} onChange={onTextChange} onKeyDown={onKeyDown} onPaste={onComposerPaste} rows={1} placeholder={!active ? '请选择会话' : (!canSendActive ? (isRoom ? '群聊没有可接收成员' : '请选择会话') : `发送给 ${convTitle(active)}...`)} className="field composer-input flex-1 resize-none rounded-lg px-3 py-2 text-sm max-h-32" />
-              <button onClick={handleSend} disabled={(!text.trim() && !pendingAtts.length) || !canSendActive} className="btn-primary composer-send inline-flex items-center gap-1 rounded-lg px-3 py-2 text-sm font-medium disabled:opacity-40"><Send size={15} />{pendingAtts.length > 0 ? ` 发送 ${pendingAtts.length} 个文件` : ' 发送'}</button>
-            </div>
-          </div>        </main>
-
-        {!standalone && showDetail && <>
-          <div className="pane-resizer shrink-0" onMouseDown={startPaneDrag} title="拖拽调整宽度" />
-          <div className="detail-pane min-w-0 overflow-hidden flex" style={paneWidth ? { width: paneWidth } : undefined}>
-            <DetailPane
-              active={active}
-              activePeer={activePeer}
-              activeRoom={activeRoom}
-              roomMembers={roomMembers}
-              peers={peers}
-              self={self}
-              searchPane={searchPane}
-              convos={convos}
-              convTitle={convTitle}
-              locateMessage={locateMessage}
-              onOpenFile={(p) => api.file.open(p)}
-              onCloseSearch={() => setSearchPane(false)}
-              onMemberClick={(p) => { if (p.self) setShowProfile(true); else setProfilePeer(peerById(p.id) || p) }}
-              onAddMember={(ids) => addGroupMembers(activeRoom, ids)}
-              onKickMember={(p) => removeGroupMember(activeRoom, p)}
-              onOpenProfile={(p) => setProfilePeer(p)}
-            />
-          </div>
-        </>}
-      </div>
-
-      {historyOpen && active && (
-        <HistoryPanel
-          title={convTitle(active)}
-          messages={convos[active] || []}
-          selfName={self ? self.name : '?'}
-          selfAvatar={settings.avatar}
-          onLocate={(mid) => { setHistoryOpen(false); locateMessage(active, mid) }}
-          onOpenFile={(p) => api.file.open(p)}
-          onClose={() => setHistoryOpen(false)}
-        />
-      )}
-      {showSettings && <SettingsPanel settings={settings} onPatch={patchSettings} onClose={() => setShowSettings(false)} onLock={onLock} onReset={onReset} onClearHistory={clearAllHistory} onClearDrafts={clearAllDrafts} />}
-      {showProfile && self && <ProfileDialog person={{ ...self, avatar: settings.avatar }} editable settings={settings} onPatchSettings={patchSettings} onRename={renameSelf} onClose={() => setShowProfile(false)} />}
-      {profilePeer && <ProfileDialog person={profilePeer} onSetRemark={(v) => api.store.setRemark(profilePeer.id, v)} onClose={() => setProfilePeer(null)} />}
-      {confirmAction && <ConfirmDialog title={confirmAction.title} text={confirmAction.text} confirmText={confirmAction.confirmText} onClose={() => { setConfirmAction(null); focusComposer() }} onConfirm={() => { const action = confirmAction; setConfirmAction(null); setTimeout(() => action.run(), 0) }} />}
-      {showCreateGroup && (
-        <Overlay onClose={() => setShowCreateGroup(false)}>
-          <div className="w-full max-w-md glass-panel rounded-2xl p-5">
-            <div className="flex items-center justify-between">
-              <div className="text-sm font-semibold txt inline-flex items-center gap-2"><UserPlus size={16} /> 创建群聊</div>
-              <button onClick={() => setShowCreateGroup(false)} className="txt-dim hover:opacity-70"><X size={16} /></button>
-            </div>
-            <input autoFocus value={groupName} onChange={(e) => setGroupName(e.target.value.slice(0, 40))} placeholder="群聊名称" className="field mt-4 w-full rounded-lg px-3 py-2 text-sm" />
-            <div className="mt-4 text-xs txt-dim">选择成员（包含离线联系人）</div>
-            <div className="mt-2 max-h-72 overflow-auto space-y-1">
-              {sortedPeers.length === 0 && <div className="text-xs txt-dim rounded-lg px-3 py-4" style={{ background: 'var(--hover)' }}>暂无可选联系人</div>}
-              {sortedPeers.map((p) => (
-                <label key={p.id} className="flex items-center gap-2 rounded-lg px-2 py-2 hover:bg-white/5 cursor-pointer">
-                  <input type="checkbox" checked={!!groupMembers[p.id]} onChange={() => toggleGroupMember(p.id)} className="accent-emerald-500" />
-                  <Avatar name={p.name} id={p.id} size={24} dim={!p.online} avatar={p.avatar} />
-                  <span className="text-sm txt flex-1 min-w-0 truncate">{p.name}</span>
-                  <span className={'text-[11px] ' + (p.online ? 'accent-txt' : 'txt-dim')}>{p.online ? '在线' : '离线'}</span>
-                </label>
-              ))}
-            </div>
-            <div className="mt-4 flex items-center justify-between">
-              <span className="text-xs txt-dim">已选 {selectedMemberCount} 人</span>
-              <div className="flex gap-2">
-                <button onClick={() => setShowCreateGroup(false)} className="btn-ghost text-sm rounded-lg px-3 py-1.5">取消</button>
-                <button onClick={createGroup} disabled={!groupName.trim() || !selectedMemberCount} className="btn-primary text-sm rounded-lg px-3 py-1.5 disabled:opacity-40">创建</button>
-              </div>
-            </div>
-          </div>
-        </Overlay>
-      )}
-      {managedGroup && (
-        <Overlay onClose={() => setGroupManage(null)}>
-          <div className="w-full max-w-md glass-panel rounded-2xl p-5">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0 flex items-center gap-3">
-                <GroupAvatar group={managedGroup} size={44} />
-                <div className="min-w-0">
-                  <div className="text-sm font-semibold txt truncate">{managedGroup.name}</div>
-                  <div className="text-xs txt-dim mt-0.5">{managedMembers.length} 位成员 · 群主 {((managedMembers.find((p) => p.id === managedGroup.ownerId) || {}).self ? '我' : ((managedMembers.find((p) => p.id === managedGroup.ownerId) || {}).name || convTitle(managedGroup.ownerId)))}</div>
-                  {managedGroup.ownerId === (self && self.id) && (
-                    <div className="mt-1.5 flex gap-2">
-                      <button onClick={() => changeGroupAvatar(managedGroup)} className="btn-ghost text-[11px] rounded-lg px-2 py-1 inline-flex items-center gap-1"><ImageIcon size={12} /> 更换群头像</button>
-                      {managedGroup.avatar && <button onClick={() => resetGroupAvatar(managedGroup)} className="btn-ghost text-[11px] rounded-lg px-2 py-1">恢复默认</button>}
-                    </div>
-                  )}
-                </div>
-              </div>
-              <button onClick={() => setGroupManage(null)} className="txt-dim hover:opacity-70 shrink-0"><X size={16} /></button>
-            </div>
-            <div className="mt-4 max-h-80 overflow-auto space-y-1">
-              {managedMembers.map((p) => {
-                const isOwner = managedGroup.ownerId === p.id
-                const canTransfer = managedGroup.ownerId === (self && self.id) && !isOwner
-                return (
-                  <div key={p.id} className="flex items-center gap-2 rounded-lg px-2 py-2" style={{ background: isOwner ? 'var(--hover)' : 'transparent' }}>
-                    <Avatar name={p.name} id={p.id} size={26} dim={!p.online} avatar={p.avatar} />
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm txt truncate">{p.self ? '我' : p.name}{isOwner && <Crown size={12} className="inline ml-1 accent-txt" />}</div>
-                      <div className="text-[11px]" style={{ color: presenceOf(p).color }}>{presenceOf(p).label}</div>
-                    </div>
-                    {canTransfer && <button onClick={() => transferGroupOwner(managedGroup, p.id)} className="btn-ghost text-xs rounded-lg px-2 py-1">转让群主</button>}
-                    {managedGroup.ownerId === (self && self.id) && !isOwner && !p.self && <button onClick={() => removeGroupMember(managedGroup, p)} className="btn-ghost text-xs rounded-lg px-2 py-1 text-red-400">移出</button>}
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-        </Overlay>
-      )}
-      {forwardOpen && (
-        <Overlay onClose={() => setForwardOpen(false)}>
-          <div className="w-80 glass-panel rounded-2xl p-4">
-            <div className="text-sm font-semibold txt mb-2">转发 {Object.keys(selected).length} 条消息</div>
-            <div className="seg-tabs grid grid-cols-2 gap-1 mb-1.5 text-xs">
-              <button onClick={() => setForwardMode('each')} className={forwardMode === 'each' ? 'seg-tab seg-tab-active' : 'seg-tab'}>逐条转发</button>
-              <button onClick={() => setForwardMode('merge')} className={forwardMode === 'merge' ? 'seg-tab seg-tab-active' : 'seg-tab'}>合并转发</button>
-            </div>
-            <div className="text-[10.5px] txt-dim mb-2">{forwardMode === 'each' ? '逐条发送到目标会话' : '合并为一条聊天记录发送'}</div>
-            {groups.length === 0 && peers.length === 0 && <div className="text-xs txt-dim px-2 py-3">暂无可转发会话</div>}
-            {groups.map((g) => <button key={g.id} onClick={() => doForward(g.id)} className="w-full text-left px-2 py-2 rounded-lg hover:bg-white/5 text-sm txt flex items-center gap-2"><GroupAvatar group={g} size={20} /> {g.name}</button>)}
-            {peers.map((p) => <button key={p.id} onClick={() => doForward(p.id)} className="w-full text-left px-2 py-2 rounded-lg hover:bg-white/5 text-sm txt flex items-center gap-2"><Avatar name={p.name} id={p.id} size={20} avatar={p.avatar} /> {p.name}</button>)}
-          </div>
-        </Overlay>
-      )}
-
-      {/* 会话右键菜单 */}
-      {sideMenu && (
-        <div className="fixed inset-0 z-50" onClick={() => setSideMenu(null)} onContextMenu={(e) => { e.preventDefault(); setSideMenu(null) }}>
-          <div
-            className="absolute glass-panel rounded-xl p-1.5 w-40 shadow-lg"
-            style={{ left: Math.max(8, Math.min(sideMenu.x, window.innerWidth - 172)), top: Math.max(8, Math.min(sideMenu.y, window.innerHeight - 180)) }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <button onClick={() => { togglePin(sideMenu.item.id); setSideMenu(null) }} className="side-item w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm text-left"><Pin size={14} /> {isPinned(sideMenu.item.id) ? '取消置顶' : '置顶'}</button>
-            <button onClick={() => { toggleMute(sideMenu.item.id); setSideMenu(null) }} className="side-item w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm text-left">{isMuted(sideMenu.item.id) ? <Bell size={14} /> : <BellOff size={14} />} {isMuted(sideMenu.item.id) ? '取消免打扰' : '免打扰'}</button>
-            <button onClick={() => { setSideMenu(null); clearConv(sideMenu.item.id) }} className="side-item w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm text-left"><Trash2 size={14} /> 清空会话</button>
-            {sideMenu.item.kind === 'room' && (
-              <button onClick={() => { setSideMenu(null); leaveGroup(sideMenu.item.group) }} className="side-item w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm text-left text-red-400"><X size={14} /> 退出群聊</button>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* 消息右键菜单 */}
-      {ctxMenu && (
-        <div className="fixed inset-0 z-50" onClick={() => setCtxMenu(null)} onContextMenu={(e) => { e.preventDefault(); setCtxMenu(null) }}>
-          <div
-            className="absolute glass-panel rounded-xl p-1.5 w-44 shadow-lg"
-            style={{ left: Math.max(8, Math.min(ctxMenu.x, window.innerWidth - 192)), top: Math.max(8, Math.min(ctxMenu.y, window.innerHeight - 200)) }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex justify-between px-1.5 pb-1.5 mb-1 border-b bd-soft">
-              {REACTIONS.slice(0, 6).map((e) => (
-                <button key={e} onClick={() => { doReact(ctxMenu.m, e); setCtxMenu(null) }} className="text-base leading-none hover:scale-125 transition">{e}</button>
-              ))}
-            </div>
-            <button onClick={() => { doReply(ctxMenu.m); setCtxMenu(null) }} className="side-item w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm text-left"><Reply size={14} /> 回复</button>
-            {ctxMenu.m.text && (
-              <button onClick={() => { copyText(ctxMenu.m.text); setCtxMenu(null) }} className="side-item w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm text-left"><Copy size={14} /> 复制</button>
-            )}
-            {(ctxMenu.m.type === 'file') && ctxMenu.m.path && (
-              <button onClick={() => { api.file.open(ctxMenu.m.path); setCtxMenu(null) }} className="side-item w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm text-left"><FileIcon size={14} /> 打开文件</button>
-            )}
-            {ctxMenu.canRecall && (
-              <button onClick={() => { doRecall(ctxMenu.m); setCtxMenu(null) }} className="side-item w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm text-left text-red-400"><Undo2 size={14} /> 撤回</button>
-            )}
-          </div>
-        </div>
-      )}
-
-      <div className="fixed bottom-4 right-4 z-40 flex flex-col gap-2 items-end">
-        {toasts.map((t) => (
-          <button key={t.id} onClick={() => { selectConv(t.conv); setToasts((p) => p.filter((x) => x.id !== t.id)) }} className={'glass-panel rounded-xl px-3 py-2 text-left max-w-xs shadow-lg ' + (t.leaving ? 'toast-out' : 'toast-in')}>
-            <div className="text-xs font-medium txt truncate">{t.title}</div>
-            <div className="text-xs txt-dim truncate">{t.text}</div>
-          </button>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-// ---------------------------------------------------------------------------
-export default function App () {
-  const [authState, setAuthState] = useState('loading')
-  const [display, setDisplay] = useState({ theme: 'system', fontPx: 15, uiStyle: 'classic', chatFont: '', chatFontPx: 13.5 })
-  const params = new URLSearchParams(window.location.search)
-  const windowKind = params.get('window')
-  const standaloneConv = windowKind === 'chat' ? (params.get('conv') || '') : ''
-  const isShotWindow = windowKind === 'shot'
-
-  useEffect(() => {
-    // 登录/解锁页固定使用经典样式，进入主界面后才应用用户选择。
-    const effective = authState === 'unlocked' ? display : { ...display, uiStyle: 'classic' }
-    applyDisplay(effective)
-    const mq = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null
-    if (!mq) return
-    const onCh = () => applyDisplay(effective)
-    try { mq.addEventListener('change', onCh) } catch (_) { mq.addListener && mq.addListener(onCh) }
-    return () => { try { mq.removeEventListener('change', onCh) } catch (_) { mq.removeListener && mq.removeListener(onCh) } }
-  }, [display, authState])
-
-  useEffect(() => {
-    if (!api || !api.auth) { setAuthState('setup'); return }
-    api.auth.status().then((s) => setAuthState((s && s.state) || 'setup')).catch(() => setAuthState('setup'))
-  }, [])
-
-  if (isShotWindow) return <ShotScreen />
-
-  let screen
-  if (authState === 'loading') screen = <div className="auth-surface h-full flex flex-col"><TopBar /><Center><div className="text-sm txt-dim">加载中...</div></Center></div>
-  else if (authState === 'setup') screen = <SetupScreen onDone={() => setAuthState('unlocked')} />
-  else if (authState === 'locked') screen = <UnlockScreen onDone={() => setAuthState('unlocked')} onReset={() => setAuthState('setup')} />
-  else screen = <ChatScreen onLock={() => setAuthState('locked')} onReset={() => setAuthState('setup')} setDisplay={setDisplay} standaloneConv={standaloneConv} />
-
-  return <div className="app-bg txt h-full"><div className="app-shell">{screen}</div></div>
-}
-
-// padding: workspace mount sync lags one write behind; this trailing comment absorbs the truncation so real code stays intact when verified from the sandbox. -------------------------------------------------------------------------------------------------------------------------
+                    <button onClick={() => takeShot('hide')} className="side-item w-full flex items-center gap-2 px-

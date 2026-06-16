@@ -278,6 +278,17 @@ class P2P extends EventEmitter {
     if (m.t === 'reaction') { this.emit('reaction', { from: m.from, scope: m.scope, roomId: m.roomId || null, mid: m.mid, emoji: m.emoji }); return }
     if (m.t === 'nudge') { this.emit('nudge', { from: m.from, text: (m.text || '').toString().slice(0, 30) }); return }
 
+    // 群共享空间·加密单播控制信令(请求/响应)：obj 含 { kind:'req'|'res', reqId, action, data }
+    if (m.t === 'share') {
+      this._upsertPeer(m.from, undefined, rinfo.address, m.sport, m.spub)
+      const key = this._keyForPub(m.spub || (this.peers.get(m.from) || {}).pub)
+      if (!key || !m.enc) return
+      let obj; try { obj = JSON.parse(cryptoMod.decrypt(key, m.enc)) } catch (_) { return }
+      if (obj.reqId && this._markSeen('share:' + obj.reqId + ':' + (obj.kind || ''))) return // 同 reqId+kind 去重，避免 UDP 重复包重复处理/重复落地
+      this.emit('share', { from: m.from, ...obj })
+      return
+    }
+
     if (m.t === 'room-avatar') {
       const key = this._keyForPub((this.peers.get(m.from) || {}).pub)
       if (!key || !m.enc) return
@@ -310,6 +321,7 @@ class P2P extends EventEmitter {
         text: typeof pt.text === 'string' ? pt.text : '',
         room: pt.room || null,
         system: pt.system || null,
+        share: pt.share || null,
         ts: pt.ts || m.ts || Date.now(),
         burn: !!pt.burn,
         ttl: pt.ttl || 10,
@@ -368,6 +380,20 @@ class P2P extends EventEmitter {
 
   setBlacklist (arr) { this.blacklist = new Set(Array.isArray(arr) ? arr : []) }
 
+  // 群共享空间·加密单播控制信令。obj: { kind, reqId, action, data }。返回 { ok } 或 { ok:false, error }
+  sendShare (toId, obj) {
+    const peer = this.peers.get(toId)
+    if (!peer || !peer.online || !peer.uport || !peer.address) return { ok: false, error: '对方离线' }
+    if (!peer.pub) return { ok: false, error: '尚未拿到对方公钥' }
+    const key = this._keyForPub(peer.pub)
+    if (!key) return { ok: false, error: '无法建立加密会话' }
+    const enc = cryptoMod.encrypt(key, JSON.stringify(obj || {}))
+    const pkt = this._encode({ t: 'share', from: this.id, to: toId, spub: this.pub, sport: this.uport, enc })
+    if (pkt.length > SAFE_DATAGRAM_BYTES) return { ok: false, error: '载荷过大(目录项过多)，请分目录查看' }
+    try { this.uniSock.send(pkt, peer.uport, peer.address, () => {}) } catch (e) { return { ok: false, error: String(e) } }
+    return { ok: true }
+  }
+
   _buildPlaintext (text, opts) {
     const o = opts || {}
     return JSON.stringify({
@@ -378,6 +404,7 @@ class P2P extends EventEmitter {
       batch: o.batch || null, // 同批次(文字+多附件)归组标记
       room: o.room || null,
       system: o.system || null,
+      share: o.share || null, // 共享空间广播载荷(随群系统消息同步，仅聊天框展示)
       ts: Date.now(),
     })
   }
@@ -385,7 +412,7 @@ class P2P extends EventEmitter {
   _echo (mid, scope, to, text, opts) {
     const o = opts || {}
     return {
-      mid, scope, from: this.id, name: this.name, avatar: this.avatar, to: to || null, text, room: o.room || null, system: o.system || null,
+      mid, scope, from: this.id, name: this.name, avatar: this.avatar, to: to || null, text, room: o.room || null, system: o.system || null, share: o.share || null,
       ts: Date.now(), burn: !!o.burn, ttl: Math.min(60, Math.max(3, parseInt(o.ttl, 10) || 10)), reply: o.reply || null, fwd: o.fwd || null, batch: o.batch || null, self: true,
       // 发送状态:私聊 sending->sent->delivered/failed;群聊只标 sent;阅后即焚不跟踪
       status: o.burn ? null : (scope === 'private' ? 'sending' : 'sent'),
@@ -562,49 +589,4 @@ class P2P extends EventEmitter {
     const pkt = this._encode(obj)
     // 群聊控制信号先广播，再对已知在线节点单播兜底；重复到达由上层按 from 去重。
     if (scope === 'group' || scope === 'room') {
-      if (this.discSock) for (const addr of this._broadcastTargets()) this.discSock.send(pkt, this.discoveryPort, addr, () => {})
-      if (this.uniSock) {
-        for (const peer of this.peers.values()) {
-          if (!peer || !peer.online || !peer.uport || !peer.address || this.blacklist.has(peer.id)) continue
-          this.uniSock.send(pkt, peer.uport, peer.address, () => {})
-        }
-      }
-    } else {
-      const peer = this.peers.get(toId)
-      if (peer && peer.online && peer.uport && peer.address) this.uniSock.send(pkt, peer.uport, peer.address, () => {})
-    }
-  }
-  sendRecall (scope, toId, mid) {
-    const obj = { t: 'recall', from: this.id, scope, mid }
-    if (scope === 'room') obj.roomId = toId
-    this._signal(scope, toId, obj)
-  }
-  sendReaction (scope, toId, mid, emoji) {
-    const obj = { t: 'reaction', from: this.id, scope, mid, emoji }
-    if (scope === 'room') obj.roomId = toId
-    this._signal(scope, toId, obj)
-  }
-
-  sayBye () {
-    if (!this.discSock) return
-    const pkt = this._encode({ t: 'bye', from: this.id })
-    for (const addr of this._broadcastTargets()) { try { this.discSock.send(pkt, this.discoveryPort, addr, () => {}) } catch (_) {} }
-  }
-
-  stop () {
-    this._closing = true
-    if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null }
-    this.sayBye()
-    for (const e of this.pending.values()) { try { clearTimeout(e.timer) } catch (_) {} }
-    this.pending.clear()
-    for (const t of this.timers) clearInterval(t)
-    this.timers = []
-    try { this.discSock && this.discSock.close() } catch (_) {}
-    try { this.uniSock && this.uniSock.close() } catch (_) {}
-    this.discSock = null
-    this.uniSock = null
-    this.started = false
-  }
-}
-
-module.exports = { P2P, DISCOVERY_PORT, MAX_TEXT_CHARS, isTextTooLong }
+      if (this.discSock) for (const addr of this._broadcastT

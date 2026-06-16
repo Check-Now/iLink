@@ -66,6 +66,8 @@ class Vault {
     if (!data.drafts) data.drafts = {}
     if (!data.reads || typeof data.reads !== 'object') data.reads = {} // 各会话已读位(ts)，用于跨重启恢复未读数
     if (!data.outbox || typeof data.outbox !== 'object') data.outbox = {} // 离线发件箱:peerId -> [item]，持久化待发(文本/文件)
+    if (!Array.isArray(data.shareSpaces)) data.shareSpaces = [] // 群共享空间·已知空间列表(宿主含 rootPath/isHost)
+    if (!data.shareSnapshots || typeof data.shareSnapshots !== 'object') data.shareSnapshots = {} // 共享空间目录缓存快照(离线只读用)
     if (!data.createdAt) data.createdAt = Date.now()
     if (!data.readsInit) {
       // 首次升级：把已有历史标记为已读，避免旧消息一次性全部被计为未读
@@ -395,15 +397,4 @@ class Vault {
     if (!this.data.drafts) this.data.drafts = {}
     if (text && text.trim()) this.data.drafts[convId] = text
     else delete this.data.drafts[convId]
-    this._save()
-  }
-
-  getSettings () { return this.data ? { ...this.data.settings } : {} }
-
-  setSettings (patch) {
-    if (this.data) { this.data.settings = { ...this.data.settings, ...(patch || {}) }; this._save() }
-    return this.getSettings()
-  }
-}
-
-module.exports = { Vault }
+    t

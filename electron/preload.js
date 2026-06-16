@@ -110,27 +110,16 @@ contextBridge.exposeInMainWorld('api', {
     pickImage: () => ipcRenderer.invoke('avatar:pickImage'),
   },
 
-  shot: {
-    begin: (mode) => ipcRenderer.invoke('shot:begin', mode),
-    getImage: () => ipcRenderer.invoke('shot:getImage'),
-    done: (dataUrl) => ipcRenderer.invoke('shot:done', dataUrl),
-    copy: (dataUrl) => ipcRenderer.invoke('shot:copy', dataUrl),
-    save: (dataUrl) => ipcRenderer.invoke('shot:save', dataUrl),
-    cancel: () => ipcRenderer.invoke('shot:cancel'),
-    onResult: (cb) => sub('shot:result', cb),
-  },
-
-  msg: {
-    recall: (scope, toId, mid) => ipcRenderer.invoke('msg:recall', scope, toId, mid),
-    react: (scope, toId, mid, emoji) => ipcRenderer.invoke('msg:react', scope, toId, mid, emoji),
-    onRecall: (cb) => sub('msg:recall', cb),
-    onReaction: (cb) => sub('msg:reaction', cb),
-    onNudge: (cb) => sub('msg:nudge', cb),
-    onStatus: (cb) => sub('msg:status', cb),
-  },
-
-  sys: {
-    openExternal: (url) => ipcRenderer.invoke('sys:openExternal', url),
-    revealLog: () => ipcRenderer.invoke('sys:revealLog'),
-  },
-})
+  // 群共享空间（纯 P2P，宿主权威 + 成员缓存）
+  share: {
+    list: (groupId) => ipcRenderer.invoke('share:list', groupId),
+    create: (groupId, name, dir) => ipcRenderer.invoke('share:create', groupId, name, dir),
+    deleteSpace: (spaceId) => ipcRenderer.invoke('share:deleteSpace', spaceId),
+    chooseDir: () => ipcRenderer.invoke('share:chooseDir'),
+    pickFiles: () => ipcRenderer.invoke('share:pickFiles'),
+    pickFolder: () => ipcRenderer.invoke('share:pickFolder'),
+    dir: (spaceId, parentId) => ipcRenderer.invoke('share:dir', spaceId, parentId),
+    history: (spaceId, entryId) => ipcRenderer.invoke('share:history', spaceId, entryId),
+    createFolder: (spaceId, parentId, name) => ipcRenderer.invoke('share:createFolder', spaceId, parentId, name),
+    rename: (spaceId, entryId, newName) => ipcRenderer.invoke('share:rename', spaceId, entryId, newName),
+    remove: (spaceId, entryId) => ipcRenderer.invoke('share:delete'
