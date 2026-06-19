@@ -176,6 +176,11 @@ function Badge ({ n, corner, muted }) {
     >{n > 99 ? '99+' : n}</span>
   )
 }
+// 分页角标：汇总未读数，红色小圆点
+function TabBadge ({ n }) {
+  if (!n) return null
+  return <span className="inline-flex items-center justify-center min-w-[15px] h-[15px] px-1 rounded-full bg-red-500 text-white text-[9px] font-medium leading-none">{n > 99 ? '99+' : n}</span>
+}
 function GroupAvatar ({ group, size = 30 }) {
   if (group && group.avatar) return <Avatar name={group.name || '群'} id={group.id} avatar={group.avatar} size={size} />
   return <div className="avatar" style={{ width: size, height: size, background: "linear-gradient(135deg, var(--accent), #8e8ff1)" }}><Users size={Math.round(size / 2)} color="#fff" /></div>
@@ -807,7 +812,7 @@ function SettingsPanel ({ settings, onPatch, onClose, onLock, onReset, onClearHi
   const [oldPw, setOldPw] = useState(''); const [newPw, setNewPw] = useState(''); const [newPw2, setNewPw2] = useState('')
   const [msg, setMsg] = useState(null); const [confirmReset, setConfirmReset] = useState(false); const [ack, setAck] = useState(false)
   const [appInfo, setAppInfo] = useState(null)
-  const [updateMsg, setUpdateMsg] = useState('')
+  const [infoMsg, setInfoMsg] = useState('')
   const s = settings || {}
   const [udpDraft, setUdpDraft] = useState(String(s.udpPort || 51888))
   const [broadcastDraft, setBroadcastDraft] = useState(s.broadcastAddrs || '')
@@ -817,11 +822,6 @@ function SettingsPanel ({ settings, onPatch, onClose, onLock, onReset, onClearHi
     const port = Math.max(1024, Math.min(65535, parseInt(udpDraft, 10) || 51888))
     setUdpDraft(String(port))
     onPatch({ udpPort: port, broadcastAddrs: broadcastDraft })
-  }
-  async function checkUpdate () {
-    setUpdateMsg('正在检查...')
-    const res = api.checkUpdate ? await api.checkUpdate() : null
-    setUpdateMsg((res && res.message) || '没有可用更新')
   }
   async function changePw () {
     setMsg(null)
@@ -952,12 +952,11 @@ function SettingsPanel ({ settings, onPatch, onClose, onLock, onReset, onClearHi
                    {appInfo && <div className="mt-1 font-mono">Electron {appInfo.versions.electron} · Node {appInfo.versions.node}</div>}
                 </div>
                 <div className="mt-2 flex flex-wrap gap-2">
-                   <button onClick={checkUpdate} className="btn-ghost text-sm rounded-lg px-3 py-1.5 inline-flex items-center gap-1"><RefreshCw size={13} /> 检查更新</button>
                    {api.sys.revealLog && <button onClick={() => api.sys.revealLog()} className="btn-ghost text-sm rounded-lg px-3 py-1.5 inline-flex items-center gap-1"><FileIcon size={13} /> 打开日志</button>}
-                   <button onClick={() => setUpdateMsg('帮助：两端需要使用相同 UDP 端口，并检查防火墙和广播地址。')} className="btn-ghost text-sm rounded-lg px-3 py-1.5 inline-flex items-center gap-1"><CircleHelp size={13} /> 帮助</button>
-                   <button onClick={() => setUpdateMsg('关于：iLink 使用 UDP 发现、端到端加密消息和本地加密存储。')} className="btn-ghost text-sm rounded-lg px-3 py-1.5 inline-flex items-center gap-1"><Info size={13} /> 关于</button>
+                   <button onClick={() => setInfoMsg('帮助：两端需要使用相同 UDP 端口，并检查防火墙和广播地址。')} className="btn-ghost text-sm rounded-lg px-3 py-1.5 inline-flex items-center gap-1"><CircleHelp size={13} /> 帮助</button>
+                   <button onClick={() => setInfoMsg('关于：iLink 使用 UDP 发现、端到端加密消息和本地加密存储。')} className="btn-ghost text-sm rounded-lg px-3 py-1.5 inline-flex items-center gap-1"><Info size={13} /> 关于</button>
                 </div>
-                {updateMsg && <div className="mt-2 text-xs accent-txt">{updateMsg}</div>}
+                {infoMsg && <div className="mt-2 text-xs accent-txt">{infoMsg}</div>}
               </SettingsCard>
             )}
           </div>
@@ -2053,6 +2052,7 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
   const [active, setActive] = useState(standaloneConv === 'group' ? '' : (standaloneConv || ''))
   const [convos, setConvos] = useState({})
   const [reads, setReads] = useState({}) // 各会话已读位(ts)；未读数由 convos + reads 派生
+  const [recent, setRecent] = useState({}) // “最近”分页会话元数据 { [convId]: { lastActiveTime, hiddenInRecent, hiddenAt } }
   const [nameById, setNameById] = useState({})
   const [text, setText] = useState('')
   const [netError, setNetError] = useState(null)
@@ -2147,11 +2147,14 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
   const [showCreateGroup, setShowCreateGroup] = useState(false)
   const [groupName, setGroupName] = useState('')
   const [groupMembers, setGroupMembers] = useState({})
+  const [groupQuery, setGroupQuery] = useState('') // 创建群聊：成员搜索
+  const [groupShowCount, setGroupShowCount] = useState(PICKER_PAGE) // 创建群聊：候选列表增量渲染
   const [groupManage, setGroupManage] = useState(null)
   const [sharePanel, setSharePanel] = useState(false) // 群文件面板
   const [sharePanelTarget, setSharePanelTarget] = useState(null)
-  const [sideTab, setSideTab] = useState('all')
+  const [sideTab, setSideTab] = useState('recent')
   const [sideQuery, setSideQuery] = useState('') // 会话列表搜索，仅前端过滤展示
+  const [sideFocusId, setSideFocusId] = useState(null) // 双击分页时高亮聚焦的未读会话（不打开聊天框）
   const [atBottom, setAtBottom] = useState(true)
   const [newBelow, setNewBelow] = useState(0)
   const [dragOver, setDragOver] = useState(false) // 拖到聊天区：直接发送
@@ -2167,6 +2170,10 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
   const nameByIdRef = useRef({}); nameByIdRef.current = nameById
   const peersRef = useRef([]); peersRef.current = peers
   const convosRef = useRef({}); convosRef.current = convos
+  const recentRef = useRef({}); recentRef.current = recent
+  const sideItemRefs = useRef({}) // convId -> 列表行 DOM，用于滚动定位
+  const unreadCursorRef = useRef({ tab: null, idx: -1 }) // 双击分页依次聚焦未读会话的游标
+  const sideFocusTimerRef = useRef(null)
   const pinnedByGroupRef = useRef({}); pinnedByGroupRef.current = pinnedByGroup
   const statusBufRef = useRef({}) // mid -> status，消息尚未渲染时暂存其发送状态，pushMsg 时回填
   const lastActivityRef = useRef(Date.now())
@@ -2190,6 +2197,7 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
       setReads(r || {}) // 未读数由 convos + reads 派生（见 unread useMemo）
     })
     if (api.store.getGroups) api.store.getGroups().then((list) => setGroups(list || []))
+    if (api.store.getRecent) api.store.getRecent().then((r) => setRecent(r || {}))
     if (api.store.getPinnedMessages) api.store.getPinnedMessages().then((list) => setPinnedByGroup(list || {}))
     api.settings.get().then((s) => { if (s) { setSettings(s); setBurnOn(!!s.burnDefault); setBurnTtl(s.burnTtl || 10); setDisplay({ theme: s.theme, fontPx: s.fontPx, uiStyle: s.uiStyle, chatFont: s.chatFont, chatFontPx: s.chatFontPx }) } })
     if (api.store.getDrafts) api.store.getDrafts().then((d) => { const saved = d || {}; setDrafts(saved); if (saved[activeRef.current]) setText(saved[activeRef.current]) })
@@ -2382,6 +2390,7 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
       next.splice(i + 1, 0, msg)
       return { ...prev, [convId]: next }
     })
+    touchRecent(convId, msg.ts || Date.now()) // 收到新消息 / 自己发送 = 关联事件
   }
   function upsertGroupLocal (group) {
     if (!group || !group.id) return
@@ -2465,6 +2474,25 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
     const lastTs = list.length ? (list[list.length - 1].ts || 0) : 0
     bumpRead(convId, Math.max(Date.now(), lastTs))
   }
+  // 关联事件（收到新消息/自己发送/主动打开）：更新 lastActiveTime；
+  // 若该会话曾被移出“最近”且本次事件晚于移出时间，则自动复原（hiddenInRecent=false）。
+  // 仅改会话元数据，绝不触碰聊天记录，故复原后历史自动完整显示。
+  function touchRecent (convId, eventTs) {
+    if (!convId) return
+    const ts = eventTs || Date.now()
+    const prevMeta = recentRef.current[convId] || {}
+    const patch = { lastActiveTime: Math.max(prevMeta.lastActiveTime || 0, ts) }
+    if (prevMeta.hiddenInRecent && ts > (prevMeta.hiddenAt || 0)) patch.hiddenInRecent = false
+    setRecent((m) => ({ ...m, [convId]: { ...(m[convId] || {}), ...patch } }))
+    if (api.store.setRecent) api.store.setRecent(convId, patch)
+  }
+  // 从“最近”分页移除：仅标记隐藏，不删除/清空任何聊天记录，也不影响“群聊/全部”分页
+  function hideFromRecent (id) {
+    if (!id) return
+    const patch = { hiddenInRecent: true, hiddenAt: Date.now() }
+    setRecent((m) => ({ ...m, [id]: { ...(m[id] || {}), ...patch } }))
+    if (api.store.setRecent) api.store.setRecent(id, patch)
+  }
   function selectConv (id) {
     const prev = activeRef.current
     if (prev !== id) {
@@ -2478,6 +2506,7 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
       setText(drafts[id] || '')
     }
     setActive(id); markRead(id)
+    if (id) touchRecent(id) // 主动打开会话 = 关联事件
     setVisibleCount(MSG_PAGE)
     atBottomRef.current = true
     setAtBottom(true)
@@ -3021,6 +3050,8 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
   function openCreateGroup () {
     setGroupName('')
     setGroupMembers({})
+    setGroupQuery('')
+    setGroupShowCount(PICKER_PAGE)
     setShowCreateGroup(true)
   }
   function toggleGroupMember (id) {
@@ -3099,11 +3130,11 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
 
   async function transferGroupOwner (group, ownerId) {
     if (!group || !ownerId || group.ownerId === ownerId) return
-    const next = await api.store.transferGroupOwner(group.id, ownerId)
-    if (next) {
-      upsertGroupLocal(next)
-      setGroupManage(next)
-    } else setNetError('\u8f6c\u8ba9\u7fa4\u4e3b\u5931\u8d25')
+    const res = await api.store.transferGroupOwner(group.id, ownerId)
+    if (res && res.ok && res.group) {
+      upsertGroupLocal(res.group)
+      setGroupManage(res.group)
+    } else setNetError((res && res.error) || '\u8f6c\u8ba9\u7fa4\u4e3b\u5931\u8d25')
   }
 
   function removeMember (group, member) {
@@ -3224,7 +3255,6 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
     if ('theme' in patch || 'fontPx' in patch || 'uiStyle' in patch || 'chatFont' in patch || 'chatFontPx' in patch) setDisplay({ theme: s.theme, fontPx: s.fontPx, uiStyle: s.uiStyle, chatFont: s.chatFont, chatFontPx: s.chatFontPx })
   }
   STATIC_GIF = !!settings.staticGif // 每次渲染同步动图静态展示开关，Avatar/StaticImg 读取
-  const onlineCount = peers.filter((p) => p.online).length
   const presence = PRESENCE.find((p) => p.key === settings.presence) || PRESENCE[0]
   const activeRoom = roomById(active)
   const isRoom = !!activeRoom
@@ -3314,6 +3344,12 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
     if (pa !== pb) return pa - pb
     return displayNameForPeer(a).localeCompare(displayNameForPeer(b), 'zh-CN')
   })
+  // 创建群聊候选：按搜索词过滤（用户名/备注/ID），大量用户时增量渲染，避免一次性挂载全部
+  const groupNeedle = groupQuery.trim().toLowerCase()
+  const groupCandidates = groupNeedle
+    ? sortedPeers.filter((p) => (p.remark || '').toLowerCase().includes(groupNeedle) || (p.name || '').toLowerCase().includes(groupNeedle) || String(p.id).toLowerCase().includes(groupNeedle))
+    : sortedPeers
+  const groupVisible = groupCandidates.slice(0, groupShowCount)
   const activeDraft = drafts[active]
   const canSendActive = canSendToConv(active)
   const canAttachActive = !!activePeer || (isRoom && hasRoomRecipient(activeRoom)) // 私聊/群聊离线也可发（暂存补发）
@@ -3364,22 +3400,57 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
     preview: msgPreview(item.id, item.subtitle),
     timeLabel: sideTime(item.last ? item.last.ts : 0),
   }))
+  // “最近”分页汇总未读数（与托盘总数口径一致，含免打扰会话）；不受搜索过滤影响
+  let recentUnread = 0
+  for (const item of conversationItems) {
+    const n = unread[item.id] || 0
+    if (!n) continue
+    const meta = recent[item.id] || {}
+    if ((meta.lastActiveTime || item.lastTs) && !meta.hiddenInRecent) recentUnread += n
+  }
   const sideNeedle = sideQuery.trim().toLowerCase()
   const sideConversations = conversationItems
     .filter((item) => {
       // 只按群名/人名过滤；消息内容搜索走顶部全局搜索或会话内搜索
       if (sideNeedle && !(item.title || '').toLowerCase().includes(sideNeedle)) return false
       if (sideTab === 'groups') return item.kind === 'room'
-      if (sideTab === 'online') return item.kind === 'peer' && item.peer && item.peer.online
+      if (sideTab === 'recent') {
+        // 有过关联且未被用户隐藏的私聊/群聊。
+        // 关联时间取存储的 lastActiveTime；历史会话回退到最后一条消息时间（旧消息本身即一次关联）。
+        const meta = recent[item.id] || {}
+        const everActive = meta.lastActiveTime || item.lastTs
+        return !!everActive && !meta.hiddenInRecent
+      }
       return true
     })
     .sort((a, b) => {
       const pa = isPinned(a.id) ? 0 : 1
       const pb = isPinned(b.id) ? 0 : 1
       if (pa !== pb) return pa - pb
+      if (sideTab === 'recent') {
+        const ra = (recent[a.id] && recent[a.id].lastActiveTime) || a.lastTs || 0
+        const rb = (recent[b.id] && recent[b.id].lastActiveTime) || b.lastTs || 0
+        return rb - ra || a.title.localeCompare(b.title)
+      }
       if (sideTab === 'all') return (b.lastTs || 0) - (a.lastTs || 0) || a.title.localeCompare(b.title)
       return a.title.localeCompare(b.title)
     })
+  // 双击当前分页：依次滚动聚焦到下一条未读会话（私聊/群聊），仅高亮不打开聊天框
+  function focusNextUnread (tab) {
+    if (sideTab !== tab) return // 仅在“当前页”下生效
+    const unreadItems = sideConversations.filter((it) => unread[it.id] > 0)
+    if (!unreadItems.length) return
+    const cur = unreadCursorRef.current
+    const start = cur.tab === tab ? cur.idx : -1
+    const idx = (start + 1) % unreadItems.length
+    const target = unreadItems[idx]
+    unreadCursorRef.current = { tab, idx }
+    const el = sideItemRefs.current[target.id]
+    if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    setSideFocusId(target.id)
+    if (sideFocusTimerRef.current) clearTimeout(sideFocusTimerRef.current)
+    sideFocusTimerRef.current = setTimeout(() => setSideFocusId(null), 1500)
+  }
   let lastDay = null
 
   return (
@@ -3438,9 +3509,9 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
               {sideQuery && <button onClick={() => setSideQuery('')} title="清除" className="txt-dim hover:opacity-70 shrink-0"><X size={12} /></button>}
             </div>
             <div className="seg-tabs grid grid-cols-3 gap-1">
-              <button onClick={() => setSideTab('all')} className={sideTab === 'all' ? 'seg-tab seg-tab-active' : 'seg-tab'}>全部</button>
-              <button onClick={() => setSideTab('groups')} className={sideTab === 'groups' ? 'seg-tab seg-tab-active' : 'seg-tab'}>群聊</button>
-              <button onClick={() => setSideTab('online')} className={sideTab === 'online' ? 'seg-tab seg-tab-active' : 'seg-tab'}>在线({onlineCount})</button>
+              <button onClick={() => setSideTab('recent')} onDoubleClick={() => focusNextUnread('recent')} className={'inline-flex items-center justify-center gap-1 ' + (sideTab === 'recent' ? 'seg-tab seg-tab-active' : 'seg-tab')}>最近<TabBadge n={recentUnread} /></button>
+              <button onClick={() => setSideTab('groups')} onDoubleClick={() => focusNextUnread('groups')} className={sideTab === 'groups' ? 'seg-tab seg-tab-active' : 'seg-tab'}>群聊</button>
+              <button onClick={() => setSideTab('all')} onDoubleClick={() => focusNextUnread('all')} className={sideTab === 'all' ? 'seg-tab seg-tab-active' : 'seg-tab'}>全部</button>
             </div>
           </div>
 
@@ -3452,7 +3523,7 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
               </div>
             )}
             {sideConversations.map((item) => (
-              <div key={item.id} onClick={() => selectConv(item.id)} onContextMenu={(e) => { e.preventDefault(); setSideMenu({ x: e.clientX, y: e.clientY, item }) }} className={'side-item w-full flex items-center gap-2.5 px-2.5 py-2 text-sm cursor-pointer ' + (active === item.id ? 'side-item-active' : '')}>
+              <div key={item.id} ref={(el) => { if (el) sideItemRefs.current[item.id] = el; else delete sideItemRefs.current[item.id] }} onClick={() => selectConv(item.id)} onContextMenu={(e) => { e.preventDefault(); setSideMenu({ x: e.clientX, y: e.clientY, item }) }} className={'side-item w-full flex items-center gap-2.5 px-2.5 py-2 text-sm cursor-pointer ' + (active === item.id ? 'side-item-active' : '') + (sideFocusId === item.id ? ' side-item-flash' : '')}>
                 {/* 头像 + 右上角未读角标；点击头像查看对应资料（不切换会话） */}
                 <span
                   className="relative shrink-0 cursor-pointer"
@@ -3946,10 +4017,20 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
               <button onClick={() => setShowCreateGroup(false)} className="txt-dim hover:opacity-70"><X size={16} /></button>
             </div>
             <input autoFocus value={groupName} onChange={(e) => setGroupName(e.target.value.slice(0, 40))} placeholder="群聊名称" className="field mt-4 w-full rounded-lg px-3 py-2 text-sm" />
-            <div className="mt-4 text-xs txt-dim">选择成员（包含离线联系人）</div>
-            <div className="mt-2 max-h-72 overflow-auto scroll space-y-1">
+            <div className="mt-4 flex items-center justify-between gap-2">
+              <span className="text-xs txt-dim">选择成员（包含离线联系人）</span>
+              {sortedPeers.length > 0 && <span className="text-[11px] txt-dim shrink-0">可选 {groupCandidates.length} 人</span>}
+            </div>
+            {sortedPeers.length > 0 && (
+              <div className="side-search mt-2">
+                <Search size={12} className="txt-dim shrink-0" />
+                <input value={groupQuery} onChange={(e) => { setGroupQuery(e.target.value); setGroupShowCount(PICKER_PAGE) }} placeholder="搜索用户名/备注/ID" />
+              </div>
+            )}
+            <div className="mt-2 max-h-72 overflow-auto scroll space-y-1" onScroll={(e) => { const el = e.currentTarget; if (el.scrollTop + el.clientHeight >= el.scrollHeight - 40 && groupShowCount < groupCandidates.length) setGroupShowCount((c) => c + PICKER_PAGE) }}>
               {sortedPeers.length === 0 && <div className="text-xs txt-dim rounded-lg px-3 py-4" style={{ background: 'var(--hover)' }}>暂无可选联系人</div>}
-              {sortedPeers.map((p) => (
+              {sortedPeers.length > 0 && groupCandidates.length === 0 && <div className="text-xs txt-dim rounded-lg px-3 py-4" style={{ background: 'var(--hover)' }}>未找到匹配的用户</div>}
+              {groupVisible.map((p) => (
                 <label key={p.id} className="flex items-center gap-2 rounded-lg px-2 py-2 hover:bg-[var(--hover)] cursor-pointer">
                   <input type="checkbox" checked={!!groupMembers[p.id]} onChange={() => toggleGroupMember(p.id)} className="accent-emerald-500" />
                   <Avatar name={displayNameForPeer(p)} id={p.id} size={24} dim={!p.online} avatar={p.avatar} />
@@ -4032,8 +4113,14 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
             style={{ '--menu-w': '184px', left: Math.max(8, Math.min(sideMenu.x, window.innerWidth - 204)), top: Math.max(8, Math.min(sideMenu.y, window.innerHeight - 190)) }}
             onClick={(e) => e.stopPropagation()}
           >
+            {unread[sideMenu.item.id] > 0 && (
+              <button onClick={() => { markRead(sideMenu.item.id); setSideMenu(null) }} className="floating-menu-item"><CheckCheck size={14} /> 标记已读</button>
+            )}
             <button onClick={() => { togglePin(sideMenu.item.id); setSideMenu(null) }} className="floating-menu-item"><Pin size={14} /> {isPinned(sideMenu.item.id) ? '取消置顶' : '置顶'}</button>
             <button onClick={() => { toggleMute(sideMenu.item.id); setSideMenu(null) }} className="floating-menu-item">{isMuted(sideMenu.item.id) ? <Bell size={14} /> : <BellOff size={14} />} {isMuted(sideMenu.item.id) ? '取消免打扰' : '免打扰'}</button>
+            {sideTab === 'recent' && (
+              <button onClick={() => { setSideMenu(null); hideFromRecent(sideMenu.item.id) }} className="floating-menu-item"><EyeOff size={14} /> 从最近移除</button>
+            )}
             <button onClick={() => { setSideMenu(null); clearConv(sideMenu.item.id) }} className="floating-menu-item"><Trash2 size={14} /> 清空会话</button>
             {sideMenu.item.kind === 'room' && (
               <button onClick={() => { setSideMenu(null); sideMenu.item.group && sideMenu.item.group.ownerId === (self && self.id) ? dismissGroup(sideMenu.item.group) : leaveGroup(sideMenu.item.group) }} className="floating-menu-item danger"><X size={14} /> {sideMenu.item.group && sideMenu.item.group.ownerId === (self && self.id) ? '解散群聊' : '退出群聊'}</button>

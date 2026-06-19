@@ -3,7 +3,7 @@
 // 阶段2/3:本地加密存储
 // - 主密码 → scrypt 派生 32 字节密钥;应用数据 AES-256-GCM 加密落盘(store.enc 密文)
 // - account.json 仅存 KDF 参数 + salt + 校验块(非敏感)
-// - 阶段3:X25519 私钥也在 store.enc 内(随主密码加密存储);隐私设置/黑名单/历史保留
+// - 阶段3:X25519 私钥也在 store.enc 内(随主密码加密存储);隐私设置/历史保留
 
 const fs = require('fs')
 const path = require('path')
@@ -91,7 +91,7 @@ class Vault {
     if (typeof s.anonymous !== 'boolean') s.anonymous = false
     if (typeof s.autoLockMin !== 'number') s.autoLockMin = 0
     if (typeof s.retentionDays !== 'number') s.retentionDays = 0
-    if (!Array.isArray(s.blacklist)) s.blacklist = []
+    if ('blacklist' in s) delete s.blacklist // 已移除黑名单功能：加载旧数据时清除该字段，正常保存后不再写入
     if (typeof s.theme !== 'string') s.theme = 'system'
     if (!['classic', 'minimal', 'material', 'dark', 'skeuo', 'glass', 'flat', 'neu', 'gradient', 'card', 'hand'].includes(s.uiStyle)) s.uiStyle = 'classic'
     if ('translucency' in s) delete s.translucency
@@ -113,7 +113,7 @@ class Vault {
     if (!Array.isArray(s.pinned)) s.pinned = []
     if (!Array.isArray(s.muted)) s.muted = []
     if (typeof s.statusText !== 'string') s.statusText = ''
-    if (!['online', 'busy', 'away'].includes(s.presence)) s.presence = 'online'
+    if (!['online', 'busy', 'away', 'dnd'].includes(s.presence)) s.presence = 'online' // dnd(免打扰)必须可持久化；未知值安全回退 online
     if (typeof s.udpPort !== 'number') s.udpPort = 51888
     if (typeof s.broadcastAddrs !== 'string') s.broadcastAddrs = ''
     if (!s.avatar || typeof s.avatar !== 'object') s.avatar = { type: 'text', text: '', color: '' }
@@ -391,9 +391,13 @@ class Vault {
     if (i >= 0) { this.data.groups.splice(i, 1); this._save() }
   }
 
-  transferGroupOwner (groupId, ownerId) {
+  // 转让群主。领域层强校验（不依赖前端）：传入 operatorId 时必须为现任群主；新群主须为群成员且不能是现任群主本人。
+  transferGroupOwner (groupId, ownerId, operatorId) {
     const group = this.data && this.data.groups.find((g) => g.id === groupId)
-    if (!group || !group.members.includes(ownerId)) return null
+    if (!group) return null
+    if (operatorId && group.ownerId !== operatorId) return null // 仅现群主可转让
+    if (!ownerId || !group.members.includes(ownerId)) return null // 新群主必须是群成员
+    if (ownerId === group.ownerId) return null // 不能转让给当前群主本人
     group.ownerId = ownerId
     group.updatedAt = Date.now()
     this._save()
@@ -466,6 +470,15 @@ class Vault {
     if (!this.data.reads) this.data.reads = {}
     const v = ts || Date.now()
     if (v > (this.data.reads[convId] || 0)) { this.data.reads[convId] = v; this._save() }
+  }
+  // “最近”分页的会话元数据：lastActiveTime（最后关联时间）/ hiddenInRecent / hiddenAt
+  // 仅记录会话状态，绝不触碰 history 中的聊天记录
+  getRecent () { return this.data ? (this.data.recent || {}) : {} }
+  setRecent (convId, meta) {
+    if (!this.data || !convId) return
+    if (!this.data.recent) this.data.recent = {}
+    this.data.recent[convId] = { ...(this.data.recent[convId] || {}), ...(meta || {}) }
+    this._save()
   }
 
   // -------- 离线发件箱（持久化，确认送达后才移除）--------

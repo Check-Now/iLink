@@ -19,7 +19,6 @@ ipcRenderer.on('<channel>', handler)
 | Renderer API | IPC Channel | 作用 |
 | --- | --- | --- |
 | `api.ping()` | `app:ping` | 返回应用版本、Electron/Node/Chrome 版本、平台、主机名和时间 |
-| `api.checkUpdate()` | `app:checkUpdate` | 检查更新占位，目前返回当前版本 |
 
 ## 认证 API
 | Renderer API | IPC Channel | 作用 |

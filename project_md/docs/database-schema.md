@@ -168,7 +168,6 @@ data-2/
   anonymous: boolean,
   autoLockMin: number,
   retentionDays: number,
-  blacklist: string[],
   theme: 'system' | string,
   uiStyle: 'classic' | 'minimal' | 'material' | 'dark' | 'skeuo' | 'glass' | 'flat' | 'neu' | 'gradient' | 'card' | 'hand',
   fontPx: number,
@@ -189,14 +188,14 @@ data-2/
   pinned: string[],
   muted: string[],
   statusText: string,
-  presence: 'online' | 'busy' | 'away',
+  presence: 'online' | 'busy' | 'away' | 'dnd',
   udpPort: number,
   broadcastAddrs: string,
   avatar: Avatar
 }
 ```
 
-当前 `Vault._ensureFields()` 默认只接受 `online`、`busy`、`away`，但运行时部分逻辑会使用 `dnd` 表示免打扰。修改 presence 时要同时检查 `vault.js`、`main.js`、`p2p.js` 和 UI。
+`Vault._ensureFields()` 接受 `online`、`busy`、`away`、`dnd`（免打扰）四种合法值，未知值安全回退为 `online`，`dnd` 可正常持久化。前端、设置层、`vault.js`、`p2p.js` 的 presence 枚举已统一。
 
 ## Drafts
 ```js

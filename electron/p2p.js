@@ -89,7 +89,6 @@ class P2P extends EventEmitter {
     this.presence = 'online' // 个人状态:online 在线 / busy 忙碌 / away 离开
     this.avatar = publicAvatar(opts.avatar)
     this.anonymous = false
-    this.blacklist = new Set()
     this.peers = new Map()      // id -> { id, name, address, uport, pub, lastSeen, online }
     this.keyCache = new Map()   // pubB64 -> derived AES key (Buffer)
     this.seen = []
@@ -252,7 +251,6 @@ class P2P extends EventEmitter {
   _onPacket (buf, rinfo) {
     const m = this._decode(buf)
     if (!m || !m.t || !m.from || m.from === this.id) return
-    if (this.blacklist.has(m.from)) return
 
     if (m.t === 'presence') {
       const firstSeen = this._upsertPeer(m.from, m.name, rinfo.address, m.uport, m.pub, m.tport, m.status, m.avatar, m.presence)
@@ -364,7 +362,6 @@ class P2P extends EventEmitter {
 
   getPeers () {
     const arr = Array.from(this.peers.values())
-      .filter((p) => !this.blacklist.has(p.id))
       .map((p) => ({ id: p.id, name: p.name, address: p.address, online: p.online, hasKey: !!p.pub, pub: p.pub || null, status: p.status || '', presence: p.presence || 'online', avatar: p.avatar || null, lastSeen: p.lastSeen || 0 }))
     arr.sort((a, b) => (a.online === b.online ? a.name.localeCompare(b.name) : a.online ? -1 : 1))
     return arr
@@ -389,8 +386,6 @@ class P2P extends EventEmitter {
     if (!peer || !peer.online || !peer.uport || !peer.address) return
     this.uniSock.send(this._encode({ t: 'nudge', from: this.id, to: toId, text: (text || '').toString().slice(0, 30) }), peer.uport, peer.address, () => {})
   }
-
-  setBlacklist (arr) { this.blacklist = new Set(Array.isArray(arr) ? arr : []) }
 
   // 群共享空间·加密单播控制信令。obj: { kind, reqId, action, data }。返回 { ok } 或 { ok:false, error }
   sendShare (toId, obj) {
@@ -540,7 +535,7 @@ class P2P extends EventEmitter {
     const targets = new Set(room.members)
     for (const id of ((opts && opts.extraRecipients) || [])) targets.add(id)
     for (const id of targets) {
-      if (id === this.id || this.blacklist.has(id)) continue
+      if (id === this.id) continue
       const p = this.peers.get(id)
       if (!p || !p.online || !p.pub) continue
       const key = this._keyForPub(p.pub)
@@ -619,7 +614,7 @@ class P2P extends EventEmitter {
       if (this.discSock) for (const addr of this._broadcastTargets()) this.discSock.send(pkt, this.discoveryPort, addr, () => {})
       if (this.uniSock) {
         for (const peer of this.peers.values()) {
-          if (!peer || !peer.online || !peer.uport || !peer.address || this.blacklist.has(peer.id)) continue
+          if (!peer || !peer.online || !peer.uport || !peer.address) continue
           this.uniSock.send(pkt, peer.uport, peer.address, () => {})
         }
       }

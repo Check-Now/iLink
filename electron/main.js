@@ -480,7 +480,6 @@ function startP2P () {
   const keys = vault.getKeys()
   const settings = vault.getSettings()
   p2p = new P2P({ id: id.id, name: id.name, pub: keys.pub, priv: keys.priv, discoveryPort: settings.udpPort, broadcastAddrs: settings.broadcastAddrs, avatar: publishableAvatar(settings.avatar) })
-  p2p.setBlacklist([])
   p2p.anonymous = !!settings.anonymous
   p2p.status = settings.statusText || ''
   p2p.presence = ['online', 'busy', 'away', 'dnd'].includes(settings.presence) ? settings.presence : 'online'
@@ -597,7 +596,6 @@ function startP2P () {
   ft = new FileTransfer({
     id: id.id, pub: keys.pub, priv: keys.priv,
     resolvePeer: (pid) => p2p && p2p.peers.get(pid),
-    isBlocked: () => false,
     ownName: () => (p2p ? p2p.displayName() : ''),
   })
   ft.on('incoming', (info) => sendToRenderer('file:incoming', info))
@@ -1234,13 +1232,6 @@ ipcMain.handle('app:ping', async () => ({
   versions: { electron: process.versions.electron, node: process.versions.node, chrome: process.versions.chrome },
   platform: process.platform, hostname: os.hostname(), time: new Date().toISOString(),
 }))
-ipcMain.handle('app:checkUpdate', async () => ({
-  ok: true,
-  current: app.getVersion(),
-  latest: app.getVersion(),
-  message: '当前为绿色版构建，暂未配置远程更新源。',
-}))
-
 ipcMain.handle('auth:status', () => ({ state: vault && vault.unlocked ? 'unlocked' : (vault && vault.exists() ? 'locked' : 'setup') }))
 ipcMain.handle('auth:setup', async (_e, pw) => {
   try { const identity = await vault.setup(pw); startP2P(); applyRuntimeSettings(vault.getSettings()); return { ok: true, identity } }
@@ -1268,7 +1259,6 @@ ipcMain.handle('settings:set', (_e, patch) => {
   }
   if ('broadcastAddrs' in nextPatch) nextPatch.broadcastAddrs = String(nextPatch.broadcastAddrs || '').slice(0, 300)
   if ('maxFileMB' in nextPatch) { const v = parseInt(nextPatch.maxFileMB, 10); nextPatch.maxFileMB = (v > 0 && v <= 102400) ? v : 0 }
-  if ('blacklist' in nextPatch) nextPatch.blacklist = []
   const networkChanged = 'udpPort' in nextPatch || 'broadcastAddrs' in nextPatch
   const s = vault.setSettings(nextPatch)
   if (patch && 'anonymous' in patch && p2p) p2p.setAnonymous(!!patch.anonymous)
@@ -1416,6 +1406,8 @@ ipcMain.handle('p2p:nudge', (_e, toId) => {
 ipcMain.handle('store:getDrafts', () => (vault && vault.unlocked ? vault.getDrafts() : {}))
 ipcMain.handle('store:getReads', () => (vault && vault.unlocked ? vault.getReads() : {}))
 ipcMain.handle('store:setRead', (_e, convId, ts) => { if (vault && vault.unlocked) vault.setRead(convId, ts) })
+ipcMain.handle('store:getRecent', () => (vault && vault.unlocked ? vault.getRecent() : {}))
+ipcMain.handle('store:setRecent', (_e, convId, meta) => { if (vault && vault.unlocked) vault.setRecent(convId, meta) })
 ipcMain.handle('store:setDraft', (_e, convId, text) => { if (vault && vault.unlocked) vault.setDraft(convId, text) })
 ipcMain.handle('store:clearHistory', () => { if (vault && vault.unlocked) vault.clearHistory(); return { ok: true } })
 ipcMain.handle('store:clearConversation', (_e, convId) => { if (vault && vault.unlocked) vault.clearConversation(convId); return { ok: true } })
@@ -1722,14 +1714,24 @@ ipcMain.handle('store:dismissGroup', (_e, groupId) => {
   return { ok: true }
 })
 ipcMain.handle('store:transferGroupOwner', (_e, groupId, ownerId) => {
-  if (!vault || !vault.unlocked) return null
-  const group = vault.transferGroupOwner(groupId, ownerId)
-  if (group && p2p) {
+  // 权限校验在主进程 + 领域层双重落实（前端限制不是安全边界）：
+  // 仅现群主可转让；群须存在且本人仍是群主；新群主须为群成员且不能是现群主本人。
+  if (!vault || !vault.unlocked) return { ok: false, error: '应用尚未就绪' }
+  const selfId = vault.getIdentity().id
+  const group = vault.getGroups().find((g) => g.id === groupId)
+  if (!group) return { ok: false, error: '群聊不存在或已解散' }
+  if (group.ownerId !== selfId) return { ok: false, error: '仅群主可转让群主权限' }
+  ownerId = String(ownerId || '').trim()
+  if (!ownerId || !(group.members || []).includes(ownerId)) return { ok: false, error: '新群主必须是当前群成员' }
+  if (ownerId === group.ownerId) return { ok: false, error: '不能将群主转让给当前群主本人' }
+  const updated = vault.transferGroupOwner(groupId, ownerId, selfId)
+  if (!updated) return { ok: false, error: '转让失败' }
+  if (p2p) {
     const name = (mergedPeers().find((p) => p.id === ownerId) || {}).name || '新群主'
-    sendRoomStored(group, '群主已转让给 ' + name, { system: 'owner-transferred' }, true)
+    sendRoomStored(updated, '群主已转让给 ' + name, { system: 'owner-transferred' }, true)
   }
   sendToRenderer('store:groups', vault.getGroups())
-  return group
+  return { ok: true, group: updated }
 })
 // ---------------- 群共享空间 IPC ----------------
 ipcMain.handle('share:list', (_e, groupId) => {

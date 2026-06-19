@@ -40,7 +40,6 @@ class FileTransfer extends EventEmitter {
     this.pub = opts.pub
     this.privObj = cryptoMod.importPriv(opts.priv)
     this.resolvePeer = opts.resolvePeer
-    this.isBlocked = opts.isBlocked || (() => false)
     this.ownName = opts.ownName || (() => '')
     this.keyCache = new Map()
     this.server = null
@@ -218,7 +217,6 @@ class FileTransfer extends EventEmitter {
         let hs; try { hs = JSON.parse(payload.toString('utf8')) } catch (_) { return fail(true) }
         from = hs.from
         resumeCap = !!hs.resume
-        if (this.isBlocked(from)) return fail(true)
         key = this._keyForPub(hs.spub)
         if (!key) return fail(true)
         stage = 'meta'

@@ -10,7 +10,6 @@ function sub (channel, cb) {
 
 contextBridge.exposeInMainWorld('api', {
   ping: () => ipcRenderer.invoke('app:ping'),
-  checkUpdate: () => ipcRenderer.invoke('app:checkUpdate'),
 
   auth: {
     status: () => ipcRenderer.invoke('auth:status'),
@@ -26,6 +25,8 @@ contextBridge.exposeInMainWorld('api', {
     getDrafts: () => ipcRenderer.invoke('store:getDrafts'),
     getReads: () => ipcRenderer.invoke('store:getReads'),
     setRead: (convId, ts) => ipcRenderer.invoke('store:setRead', convId, ts),
+    getRecent: () => ipcRenderer.invoke('store:getRecent'),
+    setRecent: (convId, meta) => ipcRenderer.invoke('store:setRecent', convId, meta),
     setDraft: (convId, text) => ipcRenderer.invoke('store:setDraft', convId, text),
     clearHistory: () => ipcRenderer.invoke('store:clearHistory'),
     clearConversation: (convId) => ipcRenderer.invoke('store:clearConversation', convId),
