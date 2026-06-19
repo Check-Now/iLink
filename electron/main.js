@@ -6,7 +6,7 @@ const os = require('os')
 const fs = require('fs')
 const crypto = require('crypto')
 const { P2P, isTextTooLong, MAX_TEXT_CHARS } = require('./p2p')
-const { Vault } = require('./vault')
+const { Vault, PINNED_MESSAGE_CAP } = require('./vault')
 const { FileTransfer, guessMime } = require('./filetransfer')
 const { safeFileName } = require('./pathutil')
 const shareMod = require('./sharespace')
@@ -27,9 +27,12 @@ let vault = null
 let tray = null
 let ft = null
 let isQuitting = false
-let suppressTrayOnMinimize = false // 截图等程序性最小化时为 true，避免触发"最小化到托盘"隐藏任务栏卡片
+let suppressTrayOnMinimize = false // 截图等程序性最小化仍复用该标记；最小化不再隐藏任务栏卡片
 const pendingFiles = new Map()
 const runtime = { minimizeToTray: true, notifyEnabled: true, notifyPreview: true, closeAction: 'ask', dnd: false }
+const pinnedSyncLastRequest = new Map()
+const PINNED_SYNC_THROTTLE_MS = 10000
+const PINNED_THUMB_MAX_CHARS = 16 * 1024
 
 // 应用图标：项目根目录 icon.png，dev 与打包后都可解析
 let appIconImg = null
@@ -383,8 +386,8 @@ function createWindow () {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'))
   }
 
-  // 任务栏卡片规则：用户主动选择"最小化到托盘"或退出时才消失；截图等程序性最小化保留卡片
-  mainWindow.on('minimize', () => { if (runtime.minimizeToTray && !suppressTrayOnMinimize && mainWindow) mainWindow.hide() })
+  // 任务栏卡片规则：最小化只交给系统处理，保留任务栏卡片；关闭到托盘仍走 close 逻辑。
+  mainWindow.on('minimize', () => { if (!suppressTrayOnMinimize) updateTrayState() })
   mainWindow.on('close', (e) => {
     if (isQuitting || !mainWindow) return
     if (runtime.closeAction === 'quit') { isQuitting = true; return }
@@ -486,20 +489,32 @@ function startP2P () {
     logPeerTransitions(list || [])
     emitPeers()
     outboxDrainAll() // 任一对端可达即尝试补发其发件箱（修复"恢复早于离线判定"导致不补发）
+    requestPinnedListsFromPeers(list || [])
   })
   p2p.on('presence', (peer) => {
     if (peer && peer.id) outboxDrain(peer.id)
+    if (peer && peer.id) requestPinnedListFromPeer(peer.id)
   })
   p2p.on('message', (m) => {
     if (m.scope === 'group') return
+    if (m.room && vault && vault.unlocked && m.system === 'group-dismissed') {
+      const known = vault.getGroups().find((g) => g.id === m.room.id)
+      const ownerId = (known && known.ownerId) || m.room.ownerId
+      if (ownerId && ownerId === m.from) {
+        removeLocalGroupData(m.room.id)
+        sendToRenderer('store:groups', vault.getGroups())
+        sendToRenderer('share:changed', { groupId: m.room.id })
+      }
+      return
+    }
     if (m.room && vault && vault.unlocked && m.system === 'member-removed' && !(m.room.members || []).includes(p2p.id)) {
-      vault.removeGroup(m.room.id)
-      vault.clearConversation(m.room.id)
-      vault.setDraft(m.room.id, '')
+      removeLocalGroupData(m.room.id)
       sendToRenderer('store:groups', vault.getGroups())
+      sendToRenderer('share:changed', { groupId: m.room.id })
       return
     }
     if (m.room && vault && vault.unlocked) vault.upsertGroup(m.room)
+    if (m.room && m.pin && vault && vault.unlocked) applyPinnedRoomEvent(m)
     // 共享空间广播（随群系统消息同步，仅聊天框展示）：更新本地已知空间/失效缓存快照
     if (m.system && typeof m.system === 'string' && m.system.indexOf('share-') === 0 && m.share && vault && vault.unlocked) {
       try { applyShareBroadcast(m) } catch (e) { logger.log('share', 'apply-broadcast-error', { e: String((e && e.message) || e).slice(0, 120) }) }
@@ -507,20 +522,22 @@ function startP2P () {
     if (vault && vault.unlocked) vault.upsertContacts([{ id: m.from, name: m.name, avatar: m.avatar || null, lastSeen: Date.now() }])
     const convId = m.scope === 'room' && m.room ? m.room.id : m.from
     const muted = vault && vault.unlocked ? (vault.getSettings().muted || []).includes(convId) : false
+    const mutedByMention = muted && messageMentionsSelf(m)
     if (!m.burn && vault && vault.unlocked) {
       vault.appendMessage(convId, m)
     }
     sendToRenderer('p2p:message', m)
     if (m.room) sendToRenderer('store:groups', vault.getGroups())
-    // 群头像更新、共享空间广播只保留聊天框内文字，不闪任务栏、不发系统通知
-    const silent = m.system === 'avatar-changed' || (typeof m.system === 'string' && m.system.indexOf('share-') === 0)
-    if (!silent && !muted && !runtime.dnd && mainWindow && !mainWindow.isFocused()) {
+    // 群头像更新、共享空间广播、取消置顶只保留聊天框内文字，不闪任务栏、不发系统通知
+    const silent = m.system === 'avatar-changed' || m.system === 'message_unpinned' || (typeof m.system === 'string' && m.system.indexOf('share-') === 0)
+    if (!silent && (!muted || mutedByMention) && !runtime.dnd && mainWindow && !mainWindow.isFocused()) {
       try { mainWindow.flashFrame(true) } catch (_) {}
     }
+    if (!silent && mutedByMention && !runtime.dnd && mainWindow && !mainWindow.isFocused()) startTrayFlash()
     // 窗口隐藏/最小化时走系统通知 + 托盘图标闪烁，否则交给渲染层 toast
-    if (!silent && !muted && mainWindow && (!mainWindow.isVisible() || mainWindow.isMinimized())) {
+    if (!silent && (!muted || mutedByMention) && mainWindow && (!mainWindow.isVisible() || mainWindow.isMinimized())) {
       const body = runtime.notifyPreview && !m.burn ? (m.text || '') : '收到新消息'
-      notify(m.name || 'iLink', body)
+      notify(localDisplayNameForId(m.from, m.name || 'iLink'), body)
       startTrayFlash() // 免打扰时内部直接忽略
     }
   })
@@ -570,6 +587,7 @@ function startP2P () {
     if (!muted && !runtime.dnd && mainWindow) { try { mainWindow.flashFrame(true) } catch (_) {} }
   })
   p2p.on('share', (msg) => { try { onShareSignal(msg) } catch (e) { logger.log('share', 'signal-error', { e: String((e && e.message) || e).slice(0, 120) }) } })
+  p2p.on('pin', (msg) => { try { onPinnedSignal(msg) } catch (e) { logger.log('pin', 'signal-error', { e: String((e && e.message) || e).slice(0, 120) }) } })
   p2p.on('ready', (self) => { sendToRenderer('p2p:ready', self); emitPeers() })
   p2p.on('neterror', (e) => { sendToRenderer('p2p:neterror', e); logger.log('net', 'neterror', { e: String(e).slice(0, 200) }) })
   p2p.on('reconnect', (r) => logger.log('net', 'reconnect', { reason: (r && r.reason) || '' }))
@@ -583,10 +601,11 @@ function startP2P () {
     ownName: () => (p2p ? p2p.displayName() : ''),
   })
   ft.on('incoming', (info) => sendToRenderer('file:incoming', info))
-  ft.on('progress', (p) => sendToRenderer('file:progress', { mid: p.mid, received: p.received, size: p.size, dir: 'in' }))
-  ft.on('send-progress', (p) => sendToRenderer('file:progress', { mid: p.mid, received: p.sent, size: p.size, dir: 'out' }))
+  ft.on('progress', (p) => { sendToRenderer('file:progress', { mid: p.mid, received: p.received, size: p.size, dir: 'in' }); if (shareXferMids.has(p.mid)) sendToRenderer('share:progress', { mid: p.mid, received: p.received, size: p.size, dir: 'in' }) })
+  ft.on('send-progress', (p) => { sendToRenderer('file:progress', { mid: p.mid, received: p.sent, size: p.size, dir: 'out' }); if (shareXferMids.has(p.mid)) sendToRenderer('share:progress', { mid: p.mid, received: p.sent, size: p.size, dir: 'out' }) })
   ft.on('sent', (p) => {
     inFlight.delete(p && p.mid)
+    if (p) shareXferMids.delete(p.mid)
     // 文件经 TCP 送达 → 移出发件箱、标记已送达（仅当确为发件箱条目）
     if (vault && vault.unlocked && p && p.toId && (vault.getOutbox()[p.toId] || []).some((x) => x.mid === p.mid)) {
       vault.outboxRemove(p.toId, p.mid)
@@ -596,6 +615,7 @@ function startP2P () {
   })
   ft.on('failed', (p) => {
     inFlight.delete(p && p.mid)
+    if (p) shareXferMids.delete(p.mid)
     const pending = p && p.mid ? findOutboxItem(p.mid) : null
     // 用户取消 → 移出发件箱不再补发；其他失败 → 留在发件箱，下次 presence 续传(断点续传)
     if (vault && vault.unlocked && p && p.canceled && p.mid) {
@@ -674,7 +694,7 @@ function finalizeFile (info) {
 }
 function onFileDone (info) {
   // 群共享空间传输：不走聊天落地，单独路由（上传→宿主入库；下载→成员落地）
-  if (info && info.share && info.share.op) { try { onShareFileDone(info) } catch (e) { logger.log('share', 'file-done-error', { e: String((e && e.message) || e).slice(0, 120) }); try { fs.unlinkSync(info.tempPath) } catch (_) {} } return }
+  if (info && info.share && info.share.op) { Promise.resolve().then(() => onShareFileDone(info)).catch((e) => { logger.log('share', 'file-done-error', { e: String((e && e.message) || e).slice(0, 120) }); try { fs.unlinkSync(info.tempPath) } catch (_) {} }); return }
   const s = vault.getSettings()
   if ((s.receiveMode || 'auto') === 'manual') {
     pendingFiles.set(info.mid, info)
@@ -783,7 +803,7 @@ function queueRoomTextDeliveries (room, msg, text, opts) {
       opts: opts || {},
       ts: msg.ts,
       allowNonMember: system === 'member-removed' && !members.has(peerId),
-      allowMissingRoom: system === 'member-left',
+      allowMissingRoom: system === 'member-left' || system === 'group-dismissed',
     })
   }
 }
@@ -806,12 +826,28 @@ function sendRoomStored (room, text, opts, emitLocal) {
   return res
 }
 
+function removeLocalGroupData (groupId) {
+  if (!vault || !vault.unlocked || !groupId) return
+  const spaces = vault.getShareSpacesByGroup ? vault.getShareSpacesByGroup(groupId) : []
+  for (const sp of spaces) {
+    shareHosts.delete(sp.spaceId)
+    vault.removeShareSpace(sp.spaceId)
+  }
+  vault.removeGroup(groupId)
+  vault.clearConversation(groupId)
+  vault.setDraft(groupId, '')
+}
+
 // ============================ 群共享空间（纯 P2P，无中心服务器）============================
-// 宿主端：本机持有 ShareStore（磁盘 meta + 物理多版本文件）；成员端：缓存目录快照，离线只读。
+// 宿主端：本机持有 ShareStore（磁盘 meta + 物理文件）；成员端：缓存目录快照，离线只读。
 // 控制信令走 p2p.sendShare 加密单播请求/响应；文件内容走 FileTransfer TCP（复用 sha256/.part/续传）。
 const shareHosts = new Map()       // spaceId -> ShareStore（仅本机作为宿主的空间）
 const sharePending = new Map()     // reqId -> { resolve, timer }  控制信令/上传等待响应
-const shareDownloads = new Map()   // transferMid -> { resolve, timer }  下载等待落地
+const shareDownloads = new Map()   // transferMid -> { resolve, timer, savePath }  下载等待落地
+const shareEarlyDownloads = new Map() // transferMid -> done info，处理下载完成早于 pending 登记的竞态
+const shareXferMids = new Set()     // 共享空间相关传输 mid，用于单独上报 share:progress 进度
+const SHARE_MAX_BYTES = 5 * 1024 * 1024 * 1024 // 群文件单文件上限 5GB
+function shareOversize (fp) { try { return fs.statSync(fp).size > SHARE_MAX_BYTES } catch (_) { return false } }
 
 function shareDataRoot () { return path.join(resolveDataDir(), 'group_shares') }
 function defaultSpaceRoot (groupId, spaceId) {
@@ -842,12 +878,73 @@ function isSpaceOnline (sp) {
 function shareSpaceView (sp) { return { ...sp, online: isSpaceOnline(sp) } }
 function isHostSelf (sp) { return sp && sp.hostUserId === selfId() }
 
-// 删除/重命名权限：宿主本人 或 空间创建者 或 群主
-function shareCanManage (sp, operatorId) {
-  if (!sp) return false
-  if (operatorId === sp.hostUserId || operatorId === sp.createdBy) return true
-  const group = vault.getGroups().find((g) => g.id === sp.groupId)
-  return !!(group && group.ownerId === operatorId)
+// 群空间删除权限：仅空间创建者。
+function shareCanDeleteSpace (sp, operatorId) {
+  if (!sp || !operatorId) return false
+  return operatorId === sp.createdBy
+}
+function shareGroup (sp) {
+  return sp && vault ? vault.getGroups().find((g) => g.id === sp.groupId) : null
+}
+function shareIsGroupMember (sp, operatorId) {
+  const group = shareGroup(sp)
+  return !!(group && (group.members || []).includes(operatorId))
+}
+function safeShareRelativePath (rel, fallback) {
+  const parts = String(rel || '').split(/[\\/]+/).filter(Boolean).map((part) => safeFileName(part, 'item')).filter(Boolean)
+  return parts.length ? parts.join(path.sep) : safeFileName(fallback || 'download')
+}
+async function copyShareDownloadFiles (files, saveDir) {
+  const out = []
+  for (const f of files || []) {
+    const rel = safeShareRelativePath(f.relativePath || f.fileName, f.fileName)
+    const dest = uniquePath(path.join(saveDir, rel))
+    await fs.promises.mkdir(path.dirname(dest), { recursive: true })
+    await fs.promises.copyFile(f.abs, dest)
+    out.push({ path: dest, fname: path.basename(dest), entryId: f.entryId })
+  }
+  return out
+}
+function makeShareDownloadWaiter (transfers, saveDir) {
+  return new Promise((resolve) => {
+    if (!transfers.length) return resolve({ ok: true, files: [] })
+    const files = []
+    let done = 0; let fail = 0; let settled = false
+    const finish = () => {
+      if (settled || done + fail < transfers.length) return
+      settled = true
+      resolve({ ok: fail === 0, files, failed: fail, error: fail ? '部分文件下载失败' : '' })
+    }
+    for (const t of transfers) {
+      const rel = safeShareRelativePath(t.relativePath || t.fname, t.fname)
+      const saveTo = uniquePath(path.join(saveDir, rel))
+      const timer = setTimeout(() => {
+        shareXferMids.delete(t.mid)
+        shareDownloads.delete(t.mid)
+        fail++
+        finish()
+      }, 30 * 60 * 1000)
+      shareXferMids.add(t.mid)
+      registerShareDownload(t.mid, {
+        timer,
+        saveTo,
+        resolve: (r) => {
+          if (r && r.ok) { done++; files.push(r) } else fail++
+          finish()
+        },
+      })
+    }
+  })
+}
+function registerShareDownload (mid, pending) {
+  shareDownloads.set(mid, pending)
+  const early = shareEarlyDownloads.get(mid)
+  if (early) {
+    shareEarlyDownloads.delete(mid)
+    if (early.__earlyTimer) clearTimeout(early.__earlyTimer)
+    delete early.__earlyTimer
+    setImmediate(() => onShareFileDone(early))
+  }
 }
 
 // 发起到宿主的控制信令请求并等待响应（带超时）
@@ -872,40 +969,56 @@ function onShareSignal (msg) {
     p.resolve(msg.data || { ok: false, error: '空响应' })
     return
   }
+  // 静默同步：宿主在目录/空间变更后推送，成员同步本地状态并刷新面板，不产生聊天消息、不弹通知
+  if (msg.kind === 'sync') {
+    if (msg.spaceId) {
+      if (msg.op === 'deleted') vault.removeShareSpace(msg.spaceId) // 群文件已被宿主删除 → 本地移除
+      else {
+        vault.clearShareSnapshot(msg.spaceId)
+        const sp = vault.getShareSpace(msg.spaceId) // 更新成员侧文件数/更新时间
+        if (sp && typeof msg.fileCount === 'number') vault.upsertShareSpace({ ...sp, fileCount: msg.fileCount, updatedAt: msg.updatedAt || sp.updatedAt })
+      }
+      sendToRenderer('share:changed', { spaceId: msg.spaceId })
+    }
+    return
+  }
   if (msg.kind !== 'req') return
   const data = msg.data || {}
   const store = shareHosts.get(data.spaceId)
   const reply = (d) => { if (p2p) p2p.sendShare(msg.from, { kind: 'res', reqId: msg.reqId, action: msg.action, data: d }) }
-  if (!store) return reply({ ok: false, error: '共享空间不存在或本机非宿主' })
+  if (!store) return reply({ ok: false, gone: true, error: '群文件不存在或已被删除' })
   const sp = vault.getShareSpace(data.spaceId)
   const group = vault.getGroups().find((g) => g.id === (sp && sp.groupId))
-  if (group && !(group.members || []).includes(msg.from)) return reply({ ok: false, error: '非群成员，无权访问' })
+  if (!group || !(group.members || []).includes(msg.from)) return reply({ ok: false, error: '非群成员，无权访问' })
   try {
+    if (msg.action === 'space_info') return reply({ ok: true, info: store.spaceInfo() })
     if (msg.action === 'dir_list') return reply(store.listDir(data.parentId))
-    if (msg.action === 'history') return reply(store.listHistory(data.entryId))
+    if (msg.action === 'search') return reply(store.search(data.query))
     if (msg.action === 'folder_create') {
       const r = store.createFolder(msg.from, data.parentId, data.name)
-      if (r.ok) { broadcastShare(sp, 'share-folder-created', displayNameForId(msg.from) + ' 新建文件夹「' + r.entry.name + '」', { type: 'folder-created', parentId: data.parentId }); persistHostSpace(sp) }
+      if (r.ok) persistHostSpace(sp)
       return reply(r)
     }
     if (msg.action === 'rename') {
-      if (!shareCanManage(sp, msg.from)) return reply({ ok: false, error: '无权限（仅宿主或群主可重命名）' })
       const r = store.rename(msg.from, data.entryId, data.newName)
-      if (r.ok) { broadcastShare(sp, 'share-renamed', displayNameForId(msg.from) + ' 重命名为「' + r.entry.name + '」', { type: 'renamed' }); persistHostSpace(sp) }
+      if (r.ok) persistHostSpace(sp)
       return reply(r)
     }
     if (msg.action === 'delete') {
-      if (!shareCanManage(sp, msg.from)) return reply({ ok: false, error: '无权限（仅宿主或群主可删除）' })
       const r = store.remove(msg.from, data.entryId)
-      if (r.ok) { broadcastShare(sp, 'share-deleted', displayNameForId(msg.from) + ' 删除了一项内容', { type: 'deleted' }); persistHostSpace(sp) }
+      if (r.ok) persistHostSpace(sp)
       return reply(r)
     }
     if (msg.action === 'download') {
-      const vp = store.versionAbsPath(data.entryId, data.versionId)
-      if (!vp) return reply({ ok: false, error: '版本不存在' })
-      const mid = crypto.randomUUID()
-      reply({ ok: true, mid, fname: vp.fileName, size: vp.size, hash: vp.hash })
-      ft.sendFile(msg.from, vp.abs, 'share', mid, sp.spaceId, null, false, mid, Date.now(), { op: 'download', spaceId: sp.spaceId, entryId: data.entryId, versionId: vp.versionId, fname: vp.fileName })
+      const dl = store.downloadList(data.entryId)
+      if (!dl.ok) return reply(dl)
+      const transfers = (dl.files || []).map((f) => ({ mid: crypto.randomUUID(), entryId: f.entryId, fname: f.fileName, size: f.size, hash: f.hash, relativePath: f.relativePath }))
+      reply({ ok: true, type: dl.type, rootName: dl.rootName, transfers })
+      for (let i = 0; i < transfers.length; i++) {
+        const t = transfers[i]
+        const f = dl.files[i]
+        ft.sendFile(msg.from, f.abs, 'share', t.mid, sp.spaceId, null, false, t.mid, Date.now(), { op: 'download', spaceId: sp.spaceId, entryId: f.entryId, fname: f.fileName, relativePath: f.relativePath })
+      }
       return
     }
   } catch (e) {
@@ -922,51 +1035,89 @@ function persistHostSpace (sp) {
   const info = store.spaceInfo()
   vault.upsertShareSpace({ ...vault.getShareSpace(sp.spaceId), fileCount: info.fileCount, updatedAt: info.updatedAt })
   sendToRenderer('share:changed', { spaceId: sp.spaceId })
+  notifyShareSync(sp) // 静默推送在线成员刷新面板（不发聊天消息、不弹通知）
+}
+
+// 宿主目录/空间变更后，向在线群成员单播静默同步信令（best-effort；离线成员下次打开/刷新时自然拉取最新）
+// op: '' 目录变更(失效缓存并刷新) / 'deleted' 群文件已删除(成员本地移除该空间)
+function notifyShareSync (sp, op) {
+  if (!p2p || !sp) return
+  const group = vault.getGroups().find((g) => g.id === sp.groupId)
+  if (!group) return
+  const store = shareHosts.get(sp.spaceId)
+  const info = store ? store.spaceInfo() : null // 随同步带上最新文件数/更新时间，成员据此更新列表
+  const reqId = crypto.randomUUID() // 同一次变更复用一个 reqId，接收端按 reqId 去重避免重复刷新
+  for (const id of (group.members || [])) {
+    if (id === selfId()) continue
+    p2p.sendShare(id, { kind: 'sync', reqId, spaceId: sp.spaceId, op: op || '', fileCount: info ? info.fileCount : undefined, updatedAt: info ? info.updatedAt : undefined })
+  }
 }
 
 // 文件传输完成（共享空间）：上传→宿主入库并广播+回执；下载→成员落地
-function onShareFileDone (info) {
+async function onShareFileDone (info) {
   const sh = info.share || {}
   if (sh.op === 'upload') {
     const store = shareHosts.get(sh.spaceId)
     const sp = vault.getShareSpace(sh.spaceId)
-    if (!store || !sp) { try { fs.unlinkSync(info.tempPath) } catch (_) {} ; if (sh.reqId && p2p) p2p.sendShare(info.from, { kind: 'res', reqId: sh.reqId, action: 'upload', data: { ok: false, error: '共享空间不存在' } }); return }
-    const r = store.placeUpload({ fileName: info.fname, tempPath: info.tempPath, uploadedBy: info.from, intent: sh.intent, entryId: sh.entryId, parentId: sh.parentId, changeNote: sh.changeNote, rename: sh.rename })
+    if (!store || !sp) { try { fs.unlinkSync(info.tempPath) } catch (_) {} ; if (sh.reqId && p2p) p2p.sendShare(info.from, { kind: 'res', reqId: sh.reqId, action: 'upload', data: { ok: false, error: '群文件不存在' } }); return }
+    // hash 复用传输层已校验的 SHA-256，避免对大文件二次同步哈希；落盘异步进行，不阻塞主进程
+    const r = await store.placeUpload({ fileName: info.fname, tempPath: info.tempPath, uploadedBy: info.from, parentId: sh.parentId, rename: sh.rename, hash: info.sha256 })
     if (!r.ok) { try { fs.unlinkSync(info.tempPath) } catch (_) {} }
     if (sh.reqId && p2p) p2p.sendShare(info.from, { kind: 'res', reqId: sh.reqId, action: 'upload', data: r })
     if (r.ok) {
-      const who = displayNameForId(info.from)
-      if (sh.intent === 'version') broadcastShare(sp, 'share-file-version-uploaded', who + ' 上传了「' + r.entry.name + '」新版本 V' + shareMod.padVersion(r.version.versionNo), { type: 'version' })
-      else broadcastShare(sp, 'share-file-uploaded', who + ' 上传了「' + r.entry.name + '」', { type: 'file', parentId: sh.parentId })
       persistHostSpace(sp)
-      logger.log('share', sh.intent === 'version' ? 'upload_version' : 'upload_file', { spaceId: sp.spaceId, by: info.from, name: r.entry.name })
+      logger.log('share', 'upload_file', { spaceId: sp.spaceId, by: info.from, name: r.entry.name })
     }
     return
   }
   if (sh.op === 'download') {
+    const key = info.transferMid || info.mid
+    const pend = shareDownloads.get(key)
+    if (!pend) {
+      const early = { ...info }
+      early.__earlyTimer = setTimeout(() => {
+        const cur = shareEarlyDownloads.get(key)
+        if (cur) {
+          shareEarlyDownloads.delete(key)
+          try { fs.unlinkSync(cur.tempPath) } catch (_) {}
+        }
+      }, 60 * 1000)
+      shareEarlyDownloads.set(key, early)
+      return
+    }
+    shareXferMids.delete(key)
     try {
-      const s = vault.getSettings()
-      const dir = s.downloadDir && fs.existsSync(s.downloadDir) ? s.downloadDir : app.getPath('downloads')
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
-      const safe = safeFileName(sh.fname || info.fname, 'file-' + info.mid)
-      const dest = uniquePath(path.join(dir, safe))
+      let dest
+      if (pend && pend.saveTo) {
+        // 用户已在“另存为”对话框选定位置（含同名覆盖确认）
+        dest = pend.saveTo
+        const pdir = path.dirname(dest)
+        if (!fs.existsSync(pdir)) fs.mkdirSync(pdir, { recursive: true })
+      } else {
+        const s = vault.getSettings()
+        const dir = s.downloadDir && fs.existsSync(s.downloadDir) ? s.downloadDir : app.getPath('downloads')
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+        dest = uniquePath(path.join(dir, safeFileName(sh.fname || info.fname, 'file-' + info.mid)))
+      }
       moveFile(info.tempPath, dest)
-      logger.log('share', 'download', { spaceId: sh.spaceId, fname: safe })
-      sendToRenderer('share:downloaded', { spaceId: sh.spaceId, entryId: sh.entryId, versionId: sh.versionId, path: dest, fname: safe })
-      const pend = shareDownloads.get(info.transferMid || info.mid)
-      if (pend) { clearTimeout(pend.timer); shareDownloads.delete(info.transferMid || info.mid); pend.resolve({ ok: true, path: dest, fname: safe }) }
+      logger.log('share', 'download', { spaceId: sh.spaceId, fname: path.basename(dest) })
+      sendToRenderer('share:downloaded', { spaceId: sh.spaceId, entryId: sh.entryId, path: dest, fname: path.basename(dest) })
+      if (pend) { clearTimeout(pend.timer); shareDownloads.delete(key); pend.resolve({ ok: true, path: dest, fname: path.basename(dest) }) }
     } catch (e) {
       try { fs.unlinkSync(info.tempPath) } catch (_) {}
+      if (pend) { clearTimeout(pend.timer); shareDownloads.delete(key); pend.resolve({ ok: false, error: String((e && e.message) || e) }) }
       sendToRenderer('share:downloadFailed', { spaceId: sh.spaceId, error: String((e && e.message) || e) })
     }
   }
 }
 
-// 广播共享空间事件（复用群聊系统消息可靠投递，仅聊天框展示，不弹通知）
+// 广播群文件事件（复用群聊系统消息可靠投递，仅聊天框展示，不弹通知）。
+// 按需求：仅「创建群文件」广播到群聊，其余操作不再广播。
 function broadcastShare (sp, system, text, payload) {
+  if (system !== 'share-space-created') return // 仅“创建群文件”在聊天框广播；上传/新建/重命名/删除等不发群消息
   const group = vault.getGroups().find((g) => g.id === sp.groupId)
   if (!group) return
-  sendRoomStored(group, '[共享空间] ' + text, { system, share: { ...(payload || {}), spaceId: sp.spaceId, groupId: sp.groupId, name: sp.name, hostUserId: sp.hostUserId, hostDeviceId: sp.hostDeviceId, createdBy: sp.createdBy, createdAt: sp.createdAt } }, true)
+  sendRoomStored(group, text, { system, share: { ...(payload || {}), spaceId: sp.spaceId, groupId: sp.groupId, name: sp.name, hostUserId: sp.hostUserId, hostDeviceId: sp.hostDeviceId, createdBy: sp.createdBy, createdAt: sp.createdAt } }, true)
 }
 
 // 成员收到共享空间广播：更新已知空间/失效缓存
@@ -992,30 +1143,29 @@ function applyShareBroadcast (m) {
   sendToRenderer('share:changed', { spaceId })
 }
 
-// 本机宿主自传：把源文件复制为临时文件后入库（不删用户原文件）
-function hostSelfUpload (sp, parentId, filePath, intent, entryId, rename) {
+// 本机宿主自传：直接把源文件异步复制进库（copyOnly 保留用户原文件），不再额外做一次同步临时拷贝
+async function hostSelfUpload (sp, parentId, filePath, rename) {
   const store = shareHosts.get(sp.spaceId)
   if (!store) return { ok: false, error: '本机存储未加载' }
-  let tmp
-  try { tmp = path.join(os.tmpdir(), 'freedom-share-' + crypto.randomUUID()); fs.copyFileSync(filePath, tmp) } catch (e) { return { ok: false, error: '读取源文件失败' } }
-  const r = store.placeUpload({ fileName: path.basename(filePath), tempPath: tmp, uploadedBy: selfId(), intent, entryId, parentId, rename })
-  if (!r.ok) { try { fs.unlinkSync(tmp) } catch (_) {} ; return r }
-  const who = displayNameForId(selfId())
-  if (intent === 'version') broadcastShare(sp, 'share-file-version-uploaded', who + ' 上传了「' + r.entry.name + '」新版本 V' + shareMod.padVersion(r.version.versionNo), { type: 'version' })
-  else broadcastShare(sp, 'share-file-uploaded', who + ' 上传了「' + r.entry.name + '」', { type: 'file', parentId })
+  // 本机上传是本地复制（无网络传输事件），用流式复制进度上报 share:progress，让宿主也看到进度条
+  const onProgress = (b, total) => sendToRenderer('share:progress', { mid: 'self', received: b, size: total || 1, dir: 'out' })
+  const r = await store.placeUpload({ fileName: path.basename(filePath), srcPath: filePath, copyOnly: true, uploadedBy: selfId(), parentId, rename, onProgress })
+  if (!r.ok) return r
+  sendToRenderer('share:progress', { mid: 'self', received: 1, size: 1, dir: 'out' }) // 100% → 渲染层清除进度条
   persistHostSpace(sp)
   return r
 }
 
 // 成员上传一个文件到宿主（FileTransfer + 等待回执）
-function shareUploadOne (sp, parentId, filePath, intent, entryId, rename) {
+function shareUploadOne (sp, parentId, filePath, rename) {
   return new Promise((resolve) => {
     if (!ft || !p2p) return resolve({ ok: false, error: '网络未就绪' })
     const reqId = crypto.randomUUID()
     const mid = crypto.randomUUID()
+    shareXferMids.add(mid) // 标记为共享空间传输，进度走 share:progress
     const timer = setTimeout(() => { sharePending.delete(reqId); resolve({ ok: false, error: '上传超时' }) }, 30 * 60 * 1000)
     sharePending.set(reqId, { resolve, timer })
-    const r = ft.sendFile(sp.hostUserId, filePath, 'share', mid, sp.spaceId, null, false, mid, Date.now(), { op: 'upload', spaceId: sp.spaceId, groupId: sp.groupId, parentId, intent, entryId, reqId, rename: !!rename })
+    const r = ft.sendFile(sp.hostUserId, filePath, 'share', mid, sp.spaceId, null, false, mid, Date.now(), { op: 'upload', spaceId: sp.spaceId, groupId: sp.groupId, parentId, reqId, rename: !!rename })
     if (r && r.error) { clearTimeout(timer); sharePending.delete(reqId); resolve({ ok: false, error: r.error }) }
   })
 }
@@ -1169,6 +1319,16 @@ ipcMain.handle('ui:setUnread', (e, n) => {
     }
   } catch (_) {}
 })
+ipcMain.handle('ui:attention', (e, opts) => {
+  if (runtime.dnd) return false
+  const win = windowFromEvent(e) || mainWindow
+  const o = opts || {}
+  try {
+    if (win && !win.isDestroyed() && o.flash !== false) win.flashFrame(true)
+    if (o.trayFlash !== false) startTrayFlash()
+  } catch (_) {}
+  return true
+})
 
 ipcMain.handle('p2p:typing', (_e, toId) => {
   if (!p2p) return
@@ -1197,6 +1357,55 @@ ipcMain.handle('msg:react', (_e, scope, toId, mid, emoji) => {
   p2p.sendReaction(scope, toId, mid, emoji)
   return { ok: true }
 })
+ipcMain.handle('msg:pin', (_e, groupId, message) => {
+  if (!p2p || !vault || !vault.unlocked) return { ok: false, error: '应用尚未就绪' }
+  const group = vault.getGroups().find((g) => g.id === groupId)
+  if (!group) return { ok: false, error: '群聊不存在' }
+  if (!canUseGroupPinnedMessages(group, p2p.id)) return { ok: false, error: '你不是群成员，不能置顶消息' }
+  const mid = message && message.mid
+  if (!mid) return { ok: false, error: '消息不存在' }
+  const stored = ((vault.getHistory() || {})[groupId] || []).find((m) => m && m.mid === mid)
+  const m = stored || message
+  if (!m || m.system) return { ok: false, error: '系统消息不能置顶' }
+  if (m.recalled) return { ok: false, error: '该消息已撤回，不能置顶' }
+  if (m.burn) return { ok: false, error: '阅后即焚消息不能置顶' }
+  if (m.type === 'file-offer') return { ok: false, error: '文件未接收完成，不能置顶' }
+  const snapshot = buildPinnedSnapshot(m)
+  const now = Date.now()
+  const pin = {
+    pinId: 'pin:' + crypto.randomUUID(),
+    groupId,
+    messageId: mid,
+    messageSnapshot: snapshot,
+    senderId: snapshot.senderId,
+    senderName: snapshot.senderName,
+    messageType: snapshot.messageType,
+    contentPreview: snapshot.contentPreview,
+    pinnedBy: p2p.id,
+    pinnedByName: currentDisplayName(),
+    pinnedAt: now,
+    status: 'pinned',
+    updatedAt: now,
+  }
+  const res = vault.addPinnedMessage(pin)
+  if (!res || !res.ok) return { ok: false, error: (res && res.error) || '置顶失败', max: PINNED_MESSAGE_CAP }
+  emitPinnedMessages()
+  sendToRenderer('msg:pinned', res.pin)
+  sendRoomStored(group, currentDisplayName() + '置顶了一条消息', { system: 'message_pinned', pin: { event: 'message_pinned', record: publicPinnedRecord(res.pin) } }, true)
+  return { ok: true, pin: res.pin, max: PINNED_MESSAGE_CAP }
+})
+ipcMain.handle('msg:unpin', (_e, groupId, pinId) => {
+  if (!p2p || !vault || !vault.unlocked) return { ok: false, error: '应用尚未就绪' }
+  const group = vault.getGroups().find((g) => g.id === groupId)
+  if (!group) return { ok: false, error: '群聊不存在' }
+  if (!canUseGroupPinnedMessages(group, p2p.id)) return { ok: false, error: '你不是群成员，不能取消置顶' }
+  const res = vault.unpinMessage(groupId, pinId, p2p.id, currentDisplayName())
+  if (!res || !res.ok) return { ok: false, error: (res && res.error) || '取消置顶失败' }
+  emitPinnedMessages()
+  sendToRenderer('msg:unpinned', res.pin)
+  sendRoomStored(group, currentDisplayName() + '取消了一条置顶消息', { system: 'message_unpinned', pin: { event: 'message_unpinned', record: publicPinnedRecord(res.pin) } }, true)
+  return { ok: true, pin: res.pin }
+})
 ipcMain.handle('sys:openExternal', (_e, url) => { try { if (/^https?:\/\//.test(url)) shell.openExternal(url) } catch (_) {} })
 ipcMain.handle('sys:revealLog', () => { try { if (logger.file) shell.showItemInFolder(logger.file) } catch (_) {} })
 ipcMain.handle('p2p:nudge', (_e, toId) => {
@@ -1219,6 +1428,10 @@ ipcMain.handle('store:setRemark', (_e, peerId, remark) => {
   return c
 })
 ipcMain.handle('store:getGroups', () => (vault && vault.unlocked ? vault.getGroups() : []))
+ipcMain.handle('store:getPinnedMessages', (_e, groupId) => {
+  if (!vault || !vault.unlocked) return groupId ? [] : {}
+  return groupId ? vault.getPinnedMessages(groupId) : vault.getPinnedMessagesByGroup()
+})
 ipcMain.handle('store:createGroup', (_e, name, members) => {
   if (!vault || !vault.unlocked) return null
   const selfId = vault.getIdentity().id
@@ -1236,6 +1449,183 @@ function displayNameForId (id) {
   const peer = mergedPeers().find((p) => p.id === id)
   return (peer && peer.name) || String(id).slice(0, 6)
 }
+
+function localDisplayNameForId (id, fallback) {
+  if (!id) return fallback || ''
+  const self = vault && vault.unlocked ? vault.getIdentity() : null
+  if (self && self.id === id) return self.name || fallback || '?'
+  const peer = mergedPeers().find((p) => p.id === id)
+  return (peer && (peer.remark || peer.name)) || fallback || String(id).slice(0, 6)
+}
+
+function currentDisplayName () {
+  if (p2p && typeof p2p.displayName === 'function') return p2p.displayName()
+  const id = vault && vault.unlocked ? vault.getIdentity() : null
+  return (id && id.name) || '我'
+}
+
+function messageMentionsSelf (m) {
+  if (!m || m.scope !== 'room' || !m.room || !m.text) return false
+  const text = String(m.text || '')
+  const names = new Set(['所有人', '全体成员', 'all', 'everyone'])
+  const current = currentDisplayName()
+  const identity = vault && vault.unlocked ? vault.getIdentity() : null
+  if (current) names.add(String(current).trim())
+  if (identity && identity.name) names.add(String(identity.name).trim())
+  const tokens = text.match(/@[^\s@]{1,32}/g) || []
+  return tokens.some((tok) => {
+    const name = tok.slice(1).trim().replace(/[，,。.!！?？:：;；）)]$/g, '')
+    if (!name) return false
+    const low = name.toLowerCase()
+    for (const it of names) {
+      if (it && (name === it || low === String(it).toLowerCase())) return true
+    }
+    return false
+  })
+}
+
+function canUseGroupPinnedMessages (group, userId) {
+  if (!group || !userId) return false
+  return Array.isArray(group.members) && group.members.includes(userId)
+}
+
+function pinnedMessageTypeOf (m) {
+  if (!m) return 'text'
+  if (m.type === 'file' || m.type === 'file-offer') return (m.mime || '').indexOf('image/') === 0 ? 'image' : 'file'
+  const text = (m.text || '').toString()
+  if (/```/.test(text)) return 'code'
+  return m.type || 'text'
+}
+
+function pinnedContentPreview (m) {
+  const type = pinnedMessageTypeOf(m)
+  if (type === 'image') return '[图片]'
+  if (type === 'file') return '[文件] ' + (m.fname || '未命名文件')
+  if (type === 'code') {
+    const body = (m.text || '').toString().replace(/```/g, '').trim()
+    const s = body ? ('[代码] ' + body) : '[代码]'
+    return s.length > 80 ? s.slice(0, 80) + '…' : s
+  }
+  const text = (m.text || '').toString().trim()
+  if (!text) return '[消息]'
+  return text.length > 80 ? text.slice(0, 80) + '…' : text
+}
+
+function pinnedImageThumbnail (m) {
+  if (!m || pinnedMessageTypeOf(m) !== 'image') return ''
+  try {
+    let img = null
+    if (m.path && fs.existsSync(m.path)) img = nativeImage.createFromPath(m.path)
+    if ((!img || img.isEmpty()) && m.dataUrl) img = nativeImage.createFromDataURL(String(m.dataUrl))
+    if (!img || img.isEmpty()) return ''
+    for (const size of [180, 140, 96]) {
+      const thumb = img.resize({ width: size, quality: 'good' })
+      const dataUrl = 'data:image/jpeg;base64,' + thumb.toJPEG(64).toString('base64')
+      if (dataUrl.length <= PINNED_THUMB_MAX_CHARS) return dataUrl
+    }
+  } catch (_) {}
+  return ''
+}
+
+function publicPinnedRecord (pin) {
+  if (!pin) return pin
+  const out = JSON.parse(JSON.stringify(pin))
+  if (out.messageSnapshot) delete out.messageSnapshot.localPath
+  return out
+}
+
+function publicPinnedGroups (groups) {
+  return (groups || []).map((g) => ({ ...g, pins: (g.pins || []).map(publicPinnedRecord) }))
+}
+
+function buildPinnedSnapshot (m) {
+  const type = pinnedMessageTypeOf(m)
+  const originalContent = type === 'text' || type === 'code'
+    ? (m.text || '').toString()
+    : { fileName: m.fname || '', fileSize: m.size || 0, mime: m.mime || '' }
+  const snap = {
+    messageId: m.mid,
+    senderId: m.from || '',
+    senderName: m.name || displayNameForId(m.from) || '',
+    messageType: type,
+    contentPreview: pinnedContentPreview(m),
+    originalContent,
+    sentAt: m.ts || Date.now(),
+  }
+  if (m.fname) snap.fileName = m.fname
+  if (m.size) snap.fileSize = m.size
+  if (m.mime) snap.mime = m.mime
+  if (type === 'image') {
+    const thumb = pinnedImageThumbnail(m)
+    if (thumb) snap.thumbnailDataUrl = thumb
+  }
+  if ((type === 'image' || type === 'file') && m.path && fs.existsSync(m.path)) snap.localPath = m.path
+  return snap
+}
+
+function emitPinnedMessages () {
+  if (!vault || !vault.unlocked) return
+  sendToRenderer('msg:pinned-list', vault.getPinnedMessagesByGroup())
+}
+
+function applyPinnedRoomEvent (m) {
+  if (!m || !m.room || !m.pin || !vault || !vault.unlocked || !p2p) return
+  if (!canUseGroupPinnedMessages(m.room, p2p.id) || !canUseGroupPinnedMessages(m.room, m.from)) return
+  const event = m.pin.event || m.system
+  const record = m.pin.record || m.pin.pin || null
+  if (!record || !record.pinId || !record.groupId) return
+  if (event !== 'message_pinned' && event !== 'message_unpinned') return
+  const res = vault.mergePinnedMessages([record])
+  if (res.changed) {
+    emitPinnedMessages()
+    sendToRenderer(event === 'message_pinned' ? 'msg:pinned' : 'msg:unpinned', record)
+  }
+}
+
+function pinnedGroupIdsForPeer (peerId) {
+  if (!vault || !vault.unlocked || !p2p || !peerId) return []
+  return (vault.getGroups() || [])
+    .filter((g) => canUseGroupPinnedMessages(g, p2p.id) && canUseGroupPinnedMessages(g, peerId))
+    .map((g) => g.id)
+}
+
+function requestPinnedListFromPeer (peerId) {
+  if (!p2p || !vault || !vault.unlocked || !peerId || !p2p.reachable(peerId)) return
+  const groupIds = pinnedGroupIdsForPeer(peerId)
+  if (!groupIds.length) return
+  const key = peerId + ':' + groupIds.sort().join(',')
+  const now = Date.now()
+  if (now - (pinnedSyncLastRequest.get(key) || 0) < PINNED_SYNC_THROTTLE_MS) return
+  pinnedSyncLastRequest.set(key, now)
+  p2p.sendPinSignal(peerId, { kind: 'pinned_message_list_request', reqId: 'pinreq:' + crypto.randomUUID(), groupIds, ts: now })
+}
+
+function requestPinnedListsFromPeers (peers) {
+  for (const peer of peers || []) {
+    if (peer && peer.id && peer.online) requestPinnedListFromPeer(peer.id)
+  }
+}
+
+function onPinnedSignal (msg) {
+  if (!msg || !msg.from || !vault || !vault.unlocked || !p2p) return
+  if (msg.kind === 'pinned_message_list_request') {
+    const allowed = new Set(pinnedGroupIdsForPeer(msg.from))
+    const requested = Array.isArray(msg.groupIds) && msg.groupIds.length ? msg.groupIds.filter((id) => allowed.has(id)) : Array.from(allowed)
+    const groups = publicPinnedGroups(vault.getPinnedSyncState(requested))
+    p2p.sendPinSignal(msg.from, { kind: 'pinned_message_list_response', reqId: msg.reqId || ('pinres:' + crypto.randomUUID()), groups, ts: Date.now() })
+    return
+  }
+  if (msg.kind !== 'pinned_message_list_response') return
+  const allowed = new Set(pinnedGroupIdsForPeer(msg.from))
+  const pins = []
+  for (const g of msg.groups || []) {
+    if (!g || !allowed.has(g.groupId)) continue
+    for (const p of g.pins || []) pins.push(p)
+  }
+  const res = vault.mergePinnedMessages(pins)
+  if (res.changed) emitPinnedMessages()
+}
+
 ipcMain.handle('store:addGroupMembers', (_e, groupId, memberIds) => {
   if (!vault || !vault.unlocked || !p2p) return { ok: false, error: '应用尚未就绪' }
   const group = vault.getGroups().find((g) => g.id === groupId)
@@ -1313,10 +1703,22 @@ ipcMain.handle('store:leaveGroup', (_e, groupId) => {
     const updated = { ...group, members: rest, ownerId: group.ownerId === selfId ? rest[0] : group.ownerId }
     sendRoomStored(updated, '退出了群聊', { system: 'member-left' }, false)
   }
-  vault.removeGroup(groupId)
-  vault.clearConversation(groupId)
-  vault.setDraft(groupId, '')
+  removeLocalGroupData(groupId)
   sendToRenderer('store:groups', vault.getGroups())
+  sendToRenderer('share:changed', { groupId })
+  return { ok: true }
+})
+ipcMain.handle('store:dismissGroup', (_e, groupId) => {
+  if (!vault || !vault.unlocked || !p2p) return { ok: false, error: '应用尚未就绪' }
+  const group = vault.getGroups().find((g) => g.id === groupId)
+  if (!group) return { ok: false, error: '群聊不存在' }
+  const ownId = vault.getIdentity().id
+  if (group.ownerId !== ownId) return { ok: false, error: '只有群主可以解散群聊' }
+  const res = sendRoomStored(group, '群聊已解散', { system: 'group-dismissed' }, false)
+  if (!res || !res.ok) return res || { ok: false, error: '解散群聊失败' }
+  removeLocalGroupData(groupId)
+  sendToRenderer('store:groups', vault.getGroups())
+  sendToRenderer('share:changed', { groupId })
   return { ok: true }
 })
 ipcMain.handle('store:transferGroupOwner', (_e, groupId, ownerId) => {
@@ -1332,7 +1734,20 @@ ipcMain.handle('store:transferGroupOwner', (_e, groupId, ownerId) => {
 // ---------------- 群共享空间 IPC ----------------
 ipcMain.handle('share:list', (_e, groupId) => {
   if (!vault || !vault.unlocked) return []
-  return vault.getShareSpacesByGroup(groupId).map(shareSpaceView)
+  const list = vault.getShareSpacesByGroup(groupId)
+  // 后台向在线宿主拉取最新文件数/更新时间；仅在确有变化时通知刷新（避免 share:changed→list→info 循环）
+  for (const sp of list) {
+    if (sp.hostUserId === selfId() || !isSpaceOnline(sp)) continue
+    shareRequest(sp.hostUserId, 'space_info', { spaceId: sp.spaceId }).then((r) => {
+      if (!r || !r.ok || !r.info) return
+      const prev = vault.getShareSpace(sp.spaceId)
+      if (prev && (prev.fileCount !== r.info.fileCount || prev.updatedAt !== r.info.updatedAt)) {
+        vault.upsertShareSpace({ ...prev, fileCount: r.info.fileCount, updatedAt: r.info.updatedAt })
+        sendToRenderer('share:changed', { spaceId: sp.spaceId })
+      }
+    }).catch(() => {})
+  }
+  return list.map(shareSpaceView)
 })
 ipcMain.handle('share:chooseDir', async () => {
   const r = await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] })
@@ -1353,4 +1768,561 @@ ipcMain.handle('share:create', (_e, groupId, name, dir) => {
   if (!vault || !vault.unlocked || !p2p) return { ok: false, error: '应用未就绪' }
   const group = vault.getGroups().find((g) => g.id === groupId)
   if (!group) return { ok: false, error: '群聊不存在' }
-  if (!(group.mem
+  if (!(group.members || []).includes(selfId())) return { ok: false, error: '你不是群成员' }
+  name = String(name || '').trim().slice(0, 60) || '共享空间'
+  const spaceId = 'space:' + crypto.randomUUID()
+  const rootPath = dir ? path.join(dir, String(spaceId).replace(/[\\/:*?"<>|]/g, '_')) : defaultSpaceRoot(groupId, spaceId)
+  let store
+  try { store = shareMod.ShareStore.create(rootPath, { spaceId, groupId, name, hostUserId: selfId(), hostDeviceId: selfDeviceId(), createdBy: selfId() }) } catch (e) { return { ok: false, error: '创建本地存储失败:' + ((e && e.message) || e) } }
+  shareHosts.set(spaceId, store)
+  const now = Date.now()
+  const sp = { spaceId, groupId, name, hostUserId: selfId(), hostDeviceId: selfDeviceId(), hostIp: (p2p.getSelf() || {}).localIp || '', rootPath, createdBy: selfId(), createdAt: now, updatedAt: now, status: 'normal', fileCount: 0, isHost: true }
+  vault.upsertShareSpace(sp)
+  broadcastShare(sp, 'share-space-created', displayNameForId(selfId()) + ' 创建了群文件「' + name + '」', { type: 'space-created' })
+  logger.log('share', 'create_space', { spaceId, groupId, name })
+  sendToRenderer('share:changed', { spaceId })
+  return { ok: true, space: shareSpaceView(sp) }
+})
+ipcMain.handle('share:deleteSpace', (_e, spaceId) => {
+  if (!vault || !vault.unlocked) return { ok: false }
+  const sp = vault.getShareSpace(spaceId)
+  if (!sp) return { ok: false, error: '空间不存在' }
+  if (!shareCanDeleteSpace(sp, selfId())) return { ok: false, error: '无权限（仅创建者可删除群文件）' }
+  if (isHostSelf(sp)) {
+    try {
+      if (sp.rootPath) fs.rmSync(sp.rootPath, { recursive: true, force: true })
+    } catch (e) {
+      return { ok: false, error: '删除本地文件失败:' + ((e && e.message) || e) }
+    }
+    shareHosts.delete(spaceId)
+  }
+  notifyShareSync(sp, 'deleted') // 同步删除给所有在线成员（从其列表移除）
+  vault.removeShareSpace(spaceId)
+  sendToRenderer('share:changed', { spaceId })
+  logger.log('share', 'delete_space', { spaceId, groupId: sp.groupId })
+  return { ok: true }
+})
+ipcMain.handle('share:dir', async (_e, spaceId, parentId) => {
+  if (!vault || !vault.unlocked) return { ok: false, error: '未就绪' }
+  const sp = vault.getShareSpace(spaceId)
+  if (!sp) return { ok: false, error: '共享空间不存在' }
+  parentId = parentId || 'root'
+  if (isHostSelf(sp)) {
+    const store = shareHosts.get(spaceId)
+    if (!store) return { ok: false, error: '本机存储未加载' }
+    const r = store.listDir(parentId)
+    if (r.ok) vault.setShareSnapshot(spaceId, parentId, r)
+    return r
+  }
+  if (!isSpaceOnline(sp)) {
+    const snap = vault.getShareSnapshot(spaceId, parentId)
+    if (snap) return { ...snap, ok: true, offline: true, cached: true }
+    return { ok: false, offline: true, error: '共享主机离线，暂时不可访问' }
+  }
+  const r = await shareRequest(sp.hostUserId, 'dir_list', { spaceId, parentId })
+  // 宿主已删除该群文件（离线成员错过同步信令时的兜底清理）
+  if (r && r.gone) { vault.removeShareSpace(spaceId); sendToRenderer('share:changed', { spaceId }) }
+  if (r && r.ok) vault.setShareSnapshot(spaceId, parentId, r)
+  return r
+})
+ipcMain.handle('share:search', async (_e, groupId, query, spaceId) => {
+  if (!vault || !vault.unlocked) return { ok: false, error: '未就绪' }
+  const q = String(query || '').trim()
+  if (!q) return { ok: true, results: [] }
+  const group = vault.getGroups().find((g) => g.id === groupId)
+  if (!group || !(group.members || []).includes(selfId())) return { ok: false, error: '你不是群成员' }
+  const spaces = (spaceId ? [vault.getShareSpace(spaceId)] : vault.getShareSpacesByGroup(groupId))
+    .filter((sp) => sp && sp.groupId === groupId)
+  const results = []
+  const addResults = (sp, entries, extra) => {
+    for (const e of entries || []) {
+      results.push({
+        ...e,
+        ...(extra || {}),
+        spaceId: sp.spaceId,
+        spaceName: sp.name,
+        space: shareSpaceView(sp),
+      })
+    }
+  }
+  for (const sp of spaces) {
+    if (isHostSelf(sp)) {
+      const store = shareHosts.get(sp.spaceId)
+      const r = store ? store.search(q) : { ok: false }
+      if (r && r.ok) addResults(sp, r.entries)
+      continue
+    }
+    if (isSpaceOnline(sp)) {
+      const r = await shareRequest(sp.hostUserId, 'search', { spaceId: sp.spaceId, query: q })
+      if (r && r.gone) { vault.removeShareSpace(sp.spaceId); sendToRenderer('share:changed', { spaceId: sp.spaceId }); continue }
+      if (r && r.ok) { addResults(sp, r.entries); continue }
+    }
+    addResults(sp, vault.searchShareSnapshots(groupId, q, sp.spaceId), { cached: true, offline: !isSpaceOnline(sp) })
+  }
+  return { ok: true, results }
+})
+ipcMain.handle('share:createFolder', async (_e, spaceId, parentId, name) => {
+  const sp = vault.getShareSpace(spaceId)
+  if (!sp) return { ok: false, error: '共享空间不存在' }
+  if (!shareIsGroupMember(sp, selfId())) return { ok: false, error: '你不是群成员' }
+  const chk = shareMod.checkSegment(name)
+  if (!chk.ok) return { ok: false, error: chk.error } // 本地先校验非法字符/穿越，给即时反馈
+  if (isHostSelf(sp)) {
+    const r = shareHosts.get(spaceId).createFolder(selfId(), parentId, name)
+    if (r.ok) persistHostSpace(sp)
+    return r
+  }
+  if (!isSpaceOnline(sp)) return { ok: false, offline: true, error: '共享主机离线，暂时不可访问' }
+  return shareRequest(sp.hostUserId, 'folder_create', { spaceId, parentId, name })
+})
+ipcMain.handle('share:rename', async (_e, spaceId, entryId, newName) => {
+  const sp = vault.getShareSpace(spaceId)
+  if (!sp) return { ok: false, error: '共享空间不存在' }
+  if (!shareIsGroupMember(sp, selfId())) return { ok: false, error: '你不是群成员' }
+  const chk = shareMod.checkSegment(newName)
+  if (!chk.ok) return { ok: false, error: chk.error }
+  if (isHostSelf(sp)) {
+    const r = shareHosts.get(spaceId).rename(selfId(), entryId, newName)
+    if (r.ok) persistHostSpace(sp)
+    return r
+  }
+  if (!isSpaceOnline(sp)) return { ok: false, offline: true, error: '共享主机离线，暂时不可访问' }
+  return shareRequest(sp.hostUserId, 'rename', { spaceId, entryId, newName })
+})
+ipcMain.handle('share:delete', async (_e, spaceId, entryId) => {
+  const sp = vault.getShareSpace(spaceId)
+  if (!sp) return { ok: false, error: '共享空间不存在' }
+  if (!shareIsGroupMember(sp, selfId())) return { ok: false, error: '你不是群成员' }
+  if (isHostSelf(sp)) {
+    const r = shareHosts.get(spaceId).remove(selfId(), entryId)
+    if (r.ok) persistHostSpace(sp)
+    return r
+  }
+  if (!isSpaceOnline(sp)) return { ok: false, offline: true, error: '共享主机离线，暂时不可访问' }
+  return shareRequest(sp.hostUserId, 'delete', { spaceId, entryId })
+})
+ipcMain.handle('share:upload', async (_e, spaceId, parentId, paths, rename) => {
+  const sp = vault.getShareSpace(spaceId)
+  if (!sp) return { ok: false, error: '共享空间不存在' }
+  if (!shareIsGroupMember(sp, selfId())) return { ok: false, error: '你不是群成员' }
+  paths = Array.isArray(paths) ? paths : (paths ? [paths] : [])
+  if (!paths.length) return { ok: false, error: '未选择文件' }
+  if (!isHostSelf(sp) && !isSpaceOnline(sp)) return { ok: false, offline: true, error: '共享主机离线，暂时不可访问' }
+  const results = []
+  for (const fp of paths) {
+    if (shareOversize(fp)) { results.push({ ok: false, oversize: true, name: path.basename(fp), error: '文件超过 5GB 上限，未上传' }); continue }
+    if (isHostSelf(sp)) results.push(await hostSelfUpload(sp, parentId, fp, rename))
+    else results.push(await shareUploadOne(sp, parentId, fp, rename))
+  }
+  return { ok: results.every((r) => r && r.ok), results }
+})
+ipcMain.handle('share:uploadFolder', async (_e, spaceId, parentId, dirPath) => {
+  const sp = vault.getShareSpace(spaceId)
+  if (!sp) return { ok: false, error: '共享空间不存在' }
+  if (!shareIsGroupMember(sp, selfId())) return { ok: false, error: '你不是群成员' }
+  if (!dirPath || !fs.existsSync(dirPath)) return { ok: false, error: '文件夹不存在' }
+  if (!isHostSelf(sp) && !isSpaceOnline(sp)) return { ok: false, offline: true, error: '共享主机离线，暂时不可访问' }
+  const summary = { folders: 0, files: 0, failed: 0, total: 0 }
+  const countFiles = (fsDir) => {
+    let total = 0
+    let items = []
+    try { items = fs.readdirSync(fsDir, { withFileTypes: true }) } catch (_) { return total }
+    for (const it of items) {
+      const full = path.join(fsDir, it.name)
+      if (it.isDirectory()) total += countFiles(full)
+      else if (it.isFile()) total++
+    }
+    return total
+  }
+  const totalFiles = countFiles(dirPath)
+  summary.total = totalFiles
+  const emitFolderProgress = () => sendToRenderer('share:progress', {
+    op: 'uploadFolder',
+    spaceId,
+    done: summary.files,
+    total: totalFiles,
+    failed: summary.failed,
+    dir: 'out',
+  })
+  emitFolderProgress()
+  const ensureFolder = async (curParent, name) => {
+    let r
+    if (isHostSelf(sp)) r = shareHosts.get(spaceId).createFolder(selfId(), curParent, name)
+    else r = await shareRequest(sp.hostUserId, 'folder_create', { spaceId, parentId: curParent, name })
+    if (r && r.ok) { summary.folders++; return r.entry.entryId }
+    // 已存在 → 复用其 id（重名目录处理）
+    let dir
+    if (isHostSelf(sp)) dir = shareHosts.get(spaceId).listDir(curParent)
+    else dir = await shareRequest(sp.hostUserId, 'dir_list', { spaceId, parentId: curParent })
+    const want = (shareMod.checkSegment(name).value) || name
+    const found = dir && dir.ok && (dir.entries || []).find((e) => e.type === 'folder' && e.name === want)
+    return found ? found.entryId : null
+  }
+  const walk = async (fsDir, curParent) => {
+    let items = []
+    try { items = fs.readdirSync(fsDir, { withFileTypes: true }) } catch (_) { return }
+    for (const it of items) {
+      const full = path.join(fsDir, it.name)
+      if (it.isDirectory()) {
+        const fid = await ensureFolder(curParent, it.name)
+        if (fid) await walk(full, fid); else summary.failed++ // 空文件夹也会被创建并保留
+      } else if (it.isFile()) {
+        if (shareOversize(full)) { summary.failed++; summary.oversize = (summary.oversize || 0) + 1; emitFolderProgress(); continue } // 跳过超 5GB 文件
+        const up = isHostSelf(sp) ? await hostSelfUpload(sp, curParent, full, true) : await shareUploadOne(sp, curParent, full, true)
+        if (up && up.ok) summary.files++; else summary.failed++
+        emitFolderProgress()
+      }
+    }
+  }
+  const topId = await ensureFolder(parentId, path.basename(dirPath))
+  if (!topId) return { ok: false, error: '创建根文件夹失败（可能名称非法）' }
+  await walk(dirPath, topId)
+  if (isHostSelf(sp)) persistHostSpace(sp)
+  return { ok: summary.failed === 0, summary }
+})
+ipcMain.handle('share:download', async (_e, spaceId, entryId, suggestedName, saveDir) => {
+  const sp = vault.getShareSpace(spaceId)
+  if (!sp) return { ok: false, error: '群文件不存在' }
+  if (!shareIsGroupMember(sp, selfId())) return { ok: false, error: '你不是群成员' }
+  let saveTo
+  let targetDir = saveDir || ''
+  if (saveDir) {
+    // 批量/指定目录：自动命名落入该目录，不逐个弹另存为；文件夹保留相对路径。
+    try { if (!fs.existsSync(saveDir)) fs.mkdirSync(saveDir, { recursive: true }) } catch (_) {}
+  } else {
+    // 单个下载：文件走另存为；文件夹走选择目录。无法提前知道远端类型时，仍以文件名作为默认另存为。
+    const saveRes = await dialog.showSaveDialog({ title: '保存到', defaultPath: safeFileName(suggestedName || 'download') })
+    if (saveRes.canceled || !saveRes.filePath) return { ok: false, canceled: true }
+    saveTo = saveRes.filePath
+  }
+  if (isHostSelf(sp)) {
+    const dl = shareHosts.get(spaceId).downloadList(entryId)
+    if (!dl.ok) return dl
+    try {
+      if (dl.type === 'file' && !saveDir) {
+        await fs.promises.mkdir(path.dirname(saveTo), { recursive: true })
+        await fs.promises.copyFile(dl.files[0].abs, saveTo)
+        sendToRenderer('share:downloaded', { spaceId, entryId, path: saveTo, fname: path.basename(saveTo) })
+        return { ok: true, path: saveTo, fname: path.basename(saveTo), files: [{ path: saveTo, fname: path.basename(saveTo), entryId }] }
+      }
+      targetDir = targetDir || path.dirname(saveTo)
+      if (dl.type === 'folder') await fs.promises.mkdir(path.join(targetDir, safeFileName(dl.rootName || 'folder')), { recursive: true })
+      const files = await copyShareDownloadFiles(dl.files, targetDir)
+      sendToRenderer('share:downloaded', { spaceId, entryId, path: targetDir, fname: path.basename(targetDir) })
+      return { ok: true, path: targetDir, fname: path.basename(targetDir), files }
+    } catch (e) { return { ok: false, error: '保存失败:' + ((e && e.message) || e) } }
+  }
+  if (!isSpaceOnline(sp)) return { ok: false, offline: true, error: '共享主机离线，暂时不可访问' }
+  const ack = await shareRequest(sp.hostUserId, 'download', { spaceId, entryId })
+  if (!ack || !ack.ok) return ack || { ok: false, error: '请求失败' }
+  const transfers = ack.transfers || []
+  if (!transfers.length) {
+    if (ack.type === 'folder' && targetDir) {
+      try { await fs.promises.mkdir(path.join(targetDir, safeFileName(ack.rootName || suggestedName || 'folder')), { recursive: true }) } catch (_) {}
+    }
+    return { ok: true, files: [] }
+  }
+  if (!targetDir) targetDir = path.dirname(saveTo)
+  if (ack.type === 'file' && !saveDir && transfers.length === 1) {
+    const t = transfers[0]
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => { shareXferMids.delete(t.mid); shareDownloads.delete(t.mid); resolve({ ok: false, error: '下载超时' }) }, 30 * 60 * 1000)
+      shareXferMids.add(t.mid)
+      registerShareDownload(t.mid, { resolve, timer, saveTo })
+    })
+  }
+  return makeShareDownloadWaiter(transfers, targetDir)
+})
+
+ipcMain.handle('p2p:getSelf', () => (p2p ? p2p.getSelf() : null))
+ipcMain.handle('p2p:getPeers', () => mergedPeers())
+ipcMain.handle('p2p:setName', (_e, name) => {
+  if (!p2p) return null
+  if (vault && vault.unlocked) vault.setNickname(name)
+  p2p.setName(name)
+  return p2p.getSelf()
+})
+ipcMain.handle('p2p:sendRoom', (_e, roomId, text, opts) => {
+  if (!p2p || !vault || !vault.unlocked) return { ok: false, error: '网络未就绪' }
+  const room = vault.getGroups().find((g) => g.id === roomId)
+  if (!room) return { ok: false, error: '群聊不存在' }
+  if (!(room.members || []).includes(p2p.id)) return { ok: false, error: '你不是群成员' }
+  return sendRoomStored(room, text, opts, false)
+})
+ipcMain.handle('p2p:sendPrivate', (_e, toId, text, opts) => {
+  if (!p2p || !vault || !vault.unlocked) return { ok: false, error: '网络未就绪' }
+  text = (text || '').toString()
+  if (!text.trim()) return { ok: false, error: '空消息' }
+  // 超长文本加密后会使单个 UDP 包超限(EMSGSIZE)，须在入发件箱前拦截，避免静默失败或上线后反复重发
+  if (isTextTooLong(text)) return { ok: false, error: '消息过长，请精简后发送（上限 ' + MAX_TEXT_CHARS + ' 字）' }
+  const o = opts || {}
+  const mid = crypto.randomUUID()
+  // 阅后即焚：仅在线直发，不入发件箱、不落库
+  if (o.burn) {
+    if (!p2p.reachable(toId)) return { ok: false, error: '对方离线，阅后即焚消息不支持暂存' }
+    const r = p2p.resendPrivate(toId, mid, text, o)
+    if (!r || !r.ok) return { ok: false, error: (r && r.error) || '发送失败' }
+    return { ok: true, msg: p2p.privateEcho(mid, toId, text, o) }
+  }
+  const online = p2p.reachable(toId)
+  const echo = p2p.privateEcho(mid, toId, text, o)
+  echo.status = online ? 'sending' : 'queued'
+  vault.appendMessage(toId, echo)
+  vault.outboxAdd(toId, { mid, kind: 'text', text, opts: { reply: o.reply || null, fwd: o.fwd || null, batch: o.batch || null, ttl: o.ttl }, ts: echo.ts })
+  outboxDrain(toId)
+  return { ok: true, msg: echo, queued: !online }
+})
+// 手动重试：确保在发件箱中并立即尝试补发（在线则发，离线则保持"待补发"）
+ipcMain.handle('p2p:resend', (_e, toId, mid, text, opts) => {
+  if (!p2p || !vault || !vault.unlocked) return { ok: false, error: '网络未就绪' }
+  const o = opts || {}
+  if (o.burn) { // 阅后即焚：绝不入发件箱；可达则直发一次，不可达则失败（不暂存、不重发）
+    if (!p2p.reachable(toId)) return { ok: false, error: '对方离线，阅后即焚消息不支持暂存' }
+    return p2p.resendPrivate(toId, mid, (text || '').toString(), o)
+  }
+  const inBox = (vault.getOutbox()[toId] || []).some((x) => x.mid === mid)
+  if (!inBox) vault.outboxAdd(toId, { mid, kind: 'text', text: (text || '').toString(), opts: { reply: o.reply || null, fwd: o.fwd || null, batch: o.batch || null, ttl: o.ttl }, ts: Date.now() })
+  setMsgStatusOut(toId, mid, p2p.reachable(toId) ? 'sending' : 'queued')
+  outboxDrain(toId)
+  return { ok: true }
+})
+// 手动重连：重建 UDP socket（自愈失败或用户主动触发时）
+ipcMain.handle('p2p:reconnect', () => { if (!p2p) return { ok: false }; p2p.reconnect('manual'); return { ok: true } })
+
+ipcMain.handle('file:send', (_e, scope, toId, paths, batch, opts) => sendFilesInternal(scope, toId, paths, batch, opts))
+ipcMain.handle('file:pick', async (_e, scope, toId) => {
+  const r = await dialog.showOpenDialog(mainWindow, { properties: ['openFile', 'multiSelections'] })
+  if (r.canceled || !r.filePaths.length) return []
+  return sendFilesInternal(scope, toId, r.filePaths)
+})
+ipcMain.handle('file:accept', (_e, mid) => { const info = pendingFiles.get(mid); if (info) { pendingFiles.delete(mid); finalizeFile(info) } })
+ipcMain.handle('file:reject', (_e, mid) => { const info = pendingFiles.get(mid); if (info) { pendingFiles.delete(mid); try { fs.unlinkSync(info.tempPath) } catch (_) {} } })
+// 取消传输中的文件(收发双向)
+ipcMain.handle('file:cancel', (_e, mid) => { if (ft) return { ok: ft.cancel(mid) }; return { ok: false } })
+// 重试发送失败的私聊文件(复用同一 mid 重新发送本地文件)
+ipcMain.handle('file:retry', (_e, toId, mid, filePath, batch) => {
+  if (!ft || !p2p) return { ok: false, error: '网络未就绪' }
+  const r = ft.sendFile(toId, filePath, 'private', mid, toId, batch || null, false)
+  if (r && r.error) return { ok: false, error: r.error }
+  return { ok: true }
+})
+// 危险可执行类型:打开前弹原生确认框,避免误运行收到的恶意程序
+const DANGEROUS_EXT = new Set(['exe', 'msi', 'msp', 'bat', 'cmd', 'com', 'scr', 'pif', 'ps1', 'psm1', 'vbs', 'vbe', 'js', 'jse', 'wsf', 'wsh', 'hta', 'jar', 'reg', 'cpl', 'lnk', 'gadget', 'sh'])
+ipcMain.handle('file:open', async (e, p) => {
+  try {
+    const ext = path.extname(String(p || '')).slice(1).toLowerCase()
+    if (DANGEROUS_EXT.has(ext)) {
+      const win = windowFromEvent(e) || mainWindow
+      const r = await dialog.showMessageBox(win, {
+        type: 'warning', buttons: ['取消', '仍要打开'], defaultId: 0, cancelId: 0, noLink: true,
+        title: '危险文件警告',
+        message: '这是可执行文件，打开后可能损坏你的电脑或泄露数据',
+        detail: path.basename(String(p)) + '（.' + ext + '）\n\n只有在你完全信任文件来源时才打开。',
+      })
+      if (r.response !== 1) { console.warn('[file] 用户取消打开危险文件:', p); return { ok: false, canceled: true } }
+      console.warn('[file] 用户确认打开危险文件:', p)
+    }
+    shell.openPath(p)
+    return { ok: true }
+  } catch (_) { return { ok: false } }
+})
+ipcMain.handle('file:showInFolder', (_e, p) => { try { shell.showItemInFolder(p) } catch (_) {} })
+ipcMain.handle('file:chooseDir', async () => {
+  const r = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] })
+  if (r.canceled || !r.filePaths.length) return null
+  return r.filePaths[0]
+})
+// ---------------- 自助截图：冻结屏幕 -> 全屏选区窗口 -> 用户框选 -> 复制/保存/发送 ----------------
+let shotWin = null
+let shotImageDataUrl = ''
+let shotRequester = null // 发起截图的窗口，选区结果只发给它
+function closeShot () {
+  try { if (shotWin && !shotWin.isDestroyed()) shotWin.close() } catch (_) {}
+  shotWin = null
+  shotImageDataUrl = ''
+}
+ipcMain.handle('shot:begin', async (e, mode) => {
+  if (shotWin && !shotWin.isDestroyed()) { shotWin.focus(); return { ok: true } }
+  const hide = mode === 'hide'
+  const wasVisible = mainWindow && mainWindow.isVisible()
+  try {
+    shotRequester = e.sender
+    if (hide && wasVisible) { suppressTrayOnMinimize = true; mainWindow.minimize(); await new Promise((r) => setTimeout(r, 320)); suppressTrayOnMinimize = false } // 程序性最小化，保留任务栏卡片
+    const disp = screen.getPrimaryDisplay()
+    const size = { width: Math.round(disp.size.width * disp.scaleFactor), height: Math.round(disp.size.height * disp.scaleFactor) }
+    const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: size })
+    const src = sources.find((s) => String(s.display_id) === String(disp.id)) || sources[0]
+    if (hide && wasVisible) mainWindow.restore()
+    if (!src || src.thumbnail.isEmpty()) return { ok: false, error: '截图失败（无可用屏幕源）' }
+    shotImageDataUrl = 'data:image/png;base64,' + src.thumbnail.toPNG().toString('base64')
+    // 选区窗口必须覆盖整个屏幕（含任务栏），与截到的全屏图 1:1 对齐，否则任务栏会重影
+    const bounds = disp.bounds
+    shotWin = new BrowserWindow({
+      x: bounds.x,
+      y: bounds.y,
+      width: bounds.width,
+      height: bounds.height,
+      fullscreen: false,
+      kiosk: false,
+      fullscreenable: false,
+      frame: false,
+      alwaysOnTop: true,
+      skipTaskbar: true,
+      resizable: false,
+      movable: false,
+      show: false,
+      backgroundColor: '#000000',
+      webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false },
+    })
+    shotWin.setAlwaysOnTop(true, 'screen-saver') // 提升层级以盖住任务栏
+    shotWin.setBounds(bounds) // Windows 可能自动调整，强制还原为全屏 bounds
+    shotWin.once('ready-to-show', () => shotWin.show())
+    shotWin.on('closed', () => { shotWin = null; shotImageDataUrl = '' })
+    loadAppWindow(shotWin, { window: 'shot' })
+    return { ok: true }
+  } catch (err) {
+    try { if (hide && wasVisible) mainWindow.restore() } catch (_) {}
+    closeShot()
+    return { ok: false, error: String(err.message || err) }
+  }
+})
+ipcMain.handle('shot:getImage', () => shotImageDataUrl)
+ipcMain.handle('shot:done', (_e, dataUrl) => {
+  try {
+    const b64 = String(dataUrl || '').split(',')[1] || ''
+    if (!b64) { closeShot(); return { ok: false } }
+    const buf = Buffer.from(b64, 'base64')
+    const p = path.join(os.tmpdir(), 'ilink-shot-' + Date.now() + '.png')
+    fs.writeFileSync(p, buf)
+    try { const img = nativeImage.createFromDataURL(String(dataUrl)); if (!img.isEmpty()) clipboard.writeImage(img) } catch (_) {} // 同时写入剪贴板，支持 Ctrl+V 粘贴到发送框
+    if (shotRequester && !shotRequester.isDestroyed()) shotRequester.send('shot:result', { path: p, name: path.basename(p), size: buf.length, dataUrl })
+    closeShot()
+    return { ok: true }
+  } catch (err) { closeShot(); return { ok: false, error: String(err.message || err) } }
+})
+ipcMain.handle('shot:copy', (_e, dataUrl) => {
+  try { const img = nativeImage.createFromDataURL(String(dataUrl || '')); if (!img.isEmpty()) clipboard.writeImage(img) } catch (_) {}
+  closeShot()
+  return { ok: true }
+})
+ipcMain.handle('shot:save', async (_e, dataUrl) => {
+  try {
+    const r = await dialog.showSaveDialog(shotWin, { defaultPath: 'iLink截图-' + Date.now() + '.png', filters: [{ name: 'PNG', extensions: ['png'] }] })
+    if (!r.canceled && r.filePath) {
+      const b64 = String(dataUrl || '').split(',')[1] || ''
+      fs.writeFileSync(r.filePath, Buffer.from(b64, 'base64'))
+    }
+  } catch (_) {}
+  closeShot()
+  return { ok: true }
+})
+ipcMain.handle('shot:cancel', () => { closeShot(); return { ok: true } })
+
+// 将粘贴的图片 dataURL 落地为临时 PNG，返回路径供待发附件使用
+ipcMain.handle('file:saveImage', (_e, dataUrl) => {
+  try {
+    const b64 = String(dataUrl || '').split(',')[1] || ''
+    if (!b64) return null
+    const buf = Buffer.from(b64, 'base64')
+    const p = path.join(os.tmpdir(), 'ilink-paste-' + Date.now() + '.png')
+    fs.writeFileSync(p, buf)
+    return { path: p, name: path.basename(p), size: buf.length }
+  } catch (_) { return null }
+})
+
+// 选择文件但不立即发送，进入输入框待发区
+ipcMain.handle('file:choose', async () => {
+  const r = await dialog.showOpenDialog(mainWindow, { properties: ['openFile', 'multiSelections'] })
+  if (r.canceled || !r.filePaths.length) return []
+  return r.filePaths.map((p) => {
+    let size = 0
+    try { size = fs.statSync(p).size } catch (_) {}
+    return { path: p, name: path.basename(p), size }
+  })
+})
+
+ipcMain.handle('avatar:pickImage', async () => {
+  const r = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile'],
+    filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'] }],
+  })
+  if (r.canceled || !r.filePaths.length) return null
+  const filePath = r.filePaths[0]
+  const stat = fs.statSync(filePath)
+  const ext = path.extname(filePath).toLowerCase()
+  if (stat.size > 4 * 1024 * 1024) return { ok: false, error: '头像图片不能超过 4 MB' }
+  // GIF 动图：保留原始字节（不重编码，否则动画丢失）；是否超限转静态由渲染层判断并提示
+  if (ext === '.gif') {
+    return { ok: true, gif: true, dataUrl: 'data:image/gif;base64,' + fs.readFileSync(filePath).toString('base64') }
+  }
+  const img = nativeImage.createFromPath(filePath)
+  if (img && !img.isEmpty()) {
+    const thumb = img.resize({ width: 192, height: 192, quality: 'good' })
+    return { ok: true, dataUrl: 'data:image/jpeg;base64,' + thumb.toJPEG(80).toString('base64') }
+  }
+  const mime = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg'
+  return { ok: true, dataUrl: 'data:' + mime + ';base64,' + fs.readFileSync(filePath).toString('base64') }
+})
+
+// ---------------- 表情包：导入的图片存于本机 data/stickers，发送时复用文件消息通道 ----------------
+function stickersDir () {
+  const dir = path.join(resolveDataDir(), 'stickers')
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+  return dir
+}
+function listStickers () {
+  try {
+    const dir = stickersDir()
+    return fs.readdirSync(dir)
+      .filter((f) => /\.(png|jpe?g|webp|gif)$/i.test(f))
+      .sort()
+      .map((f) => {
+        const fp = path.join(dir, f)
+        const ext = path.extname(f).slice(1).toLowerCase()
+        const mime = ext === 'jpg' ? 'image/jpeg' : 'image/' + ext
+        try { return { id: f, path: fp, dataUrl: 'data:' + mime + ';base64,' + fs.readFileSync(fp).toString('base64') } } catch (_) { return null }
+      })
+      .filter(Boolean)
+  } catch (_) { return [] }
+}
+ipcMain.handle('stickers:list', () => listStickers())
+ipcMain.handle('stickers:add', async () => {
+  const r = await dialog.showOpenDialog(mainWindow, { properties: ['openFile', 'multiSelections'], filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'] }] })
+  if (r.canceled || !r.filePaths.length) return { ok: true, skipped: 0, stickers: listStickers() }
+  const dir = stickersDir()
+  let skipped = 0
+  for (const fp of r.filePaths) {
+    try {
+      if (fs.statSync(fp).size > 2 * 1024 * 1024) { skipped++; continue } // 与聊天图片内嵌预览上限一致
+      fs.copyFileSync(fp, uniquePath(path.join(dir, path.basename(fp))))
+    } catch (_) { skipped++ }
+  }
+  return { ok: true, skipped, stickers: listStickers() }
+})
+ipcMain.handle('stickers:remove', (_e, id) => {
+  try {
+    const fp = path.join(stickersDir(), path.basename(String(id || ''))) // basename 防路径穿越
+    if (fs.existsSync(fp)) fs.unlinkSync(fp)
+  } catch (_) {}
+  return listStickers()
+})
+
+app.whenReady().then(() => {
+  vault = new Vault(resolveDataDir())
+  logger.init(resolveDataDir())
+  setupTray()
+  createWindow()
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+  })
+})
+
+app.on('before-quit', () => { isQuitting = true })
+
+app.on('window-all-closed', () => {
+  stopP2P()
+  app.quit()
+})
+
+// padding: workspace mount sync lags one write behind; this trailing comment absorbs the truncation so real code stays intact when verified from the sandbox. -------------------------------------------------------------------------------------------------------------------------

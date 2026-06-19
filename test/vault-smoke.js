@@ -19,6 +19,16 @@ const { Vault } = require('../electron/vault')
   assert.ok(id1 && id1.id, 'setup 返回身份')
   v1.appendMessage('peerX', { mid: 'm1', text: 'hello', self: true, ts: Date.now() })
   v1.setSettings({ maxFileMB: 7, uiStyle: 'dark' })
+  v1.upsertShareSpace({ spaceId: 'sp1', groupId: 'room:g', name: '资料区', status: 'normal' })
+  v1.setShareSnapshot('sp1', 'root', {
+    ok: true,
+    parentId: 'root',
+    breadcrumb: [{ entryId: 'root', name: '根目录' }],
+    entries: [{ entryId: 'f1', parentId: 'root', name: '搜索命中文件.txt', type: 'file', size: 5 }],
+  })
+  const cachedHits = v1.searchShareSnapshots('room:g', '命中', 'sp1')
+  assert.strictEqual(cachedHits.length, 1, '共享空间离线快照搜索应命中')
+  assert.strictEqual(cachedHits[0].spaceName, '资料区', '搜索结果应包含空间名称')
   v1.flush()
   assert.ok(fs.existsSync(path.join(dir, 'store.enc')), 'store.enc 已落盘')
 

@@ -1,9 +1,18 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Users, User, Send, Pencil, Check, ShieldCheck, Lock, Settings, X, Flame, EyeOff, Minus, Plus, Sun, Monitor, Info, Search, Smile, Paperclip, File as FileIcon, Reply, Undo2, Forward, Pin, Bell, BellOff, Trash2, Hand, Upload, Image as ImageIcon, Type, RefreshCw, CircleHelp, Network, UserPlus, Crown, ChevronDown, Copy, Camera, History, CheckCheck, Clock, AlertCircle, Folder, FolderPlus, Download, ArrowLeft, ChevronRight, MoreVertical, HardDrive, FolderOpen, WifiOff } from 'lucide-react'
+import { Users, User, Send, Pencil, Check, ShieldCheck, Lock, Settings, X, Flame, EyeOff, Minus, Plus, Sun, Monitor, Info, Search, Smile, Paperclip, File as FileIcon, Reply, Undo2, Forward, Pin, Bell, BellOff, Trash2, Hand, Upload, Image as ImageIcon, Type, RefreshCw, CircleHelp, Network, UserPlus, Crown, ChevronDown, Copy, Camera, History, CheckCheck, Clock, AlertCircle, Folder, FolderPlus, Download, ArrowLeft, ChevronRight, HardDrive, FolderOpen, WifiOff } from 'lucide-react'
 
 const api = window.api
 const FIELD = 'field w-full rounded-lg px-3 py-2 text-sm outline-none'
-const EMOJIS = ['\u{1F604}', '\u{1F602}', '\u{1F60A}', '\u{1F60D}', '\u{1F60E}', '\u{1F914}', '\u{1F44D}', '\u{1F64F}', '\u{1F389}', '\u2764\uFE0F', '\u{1F525}', '\u{1F629}', '\u{1F628}', '\u{1F62D}', '\u{1F44F}', '\u{1F64C}', '\u{1F4AA}', '\u2728', '\u{1F680}', '\u{1F31F}', '\u{1F614}', '\u{1F917}', '\u{1F440}', '\u{1F4B4}', '\u{1F923}', '\u{1F604}', '\u{1F626}', '\u{1F61D}', '\u{1F92C}', '\u{1F62D}', '\u{1F44B}', '\u2705', '\u2764', '\u26A0\uFE0F', '\u{1F4AC}', '\u{1F4F8}', '\u{1F352}', '\u2600\uFE0F', '\u{1F431}', '\u{1F31B}']
+const EMOJIS = [
+  '😀 😃 😄 😁 😆 😅 😂 🤣 😊 😇 🙂 🙃 😉 😌 😍 🥰 😘 😗 😙 😚 😋 😛 😝 😜 🤪 🤨 🧐 🤓 😎 🥳 🤩 😏 😒 😞 😔 😟 😕 🙁 ☹️ 😣 😖 😫 😩 🥺 😢 😭 😤 😠 😡 🤬 🤯 😳 🥵 🥶 😱 😨 😰 😥 😓 🤗 🤔 🫡 🤭 🫢 🫣 🤫 🤥 😶 😐 😑 😬 🙄 😯 😦 😧 😮 😲 🥱 😴 🤤 😪 😵 🤐 🥴 🤢 🤮 🤧 😷 🤒 🤕 🤑 🤠',
+  '😈 👿 👻 💀 ☠️ 👽 🤖 🎃 😺 😸 😹 😻 😼 😽 🙀 😿 😾 👋 🤚 🖐️ ✋ 🖖 👌 🤌 🤏 ✌️ 🤞 🫰 🤟 🤘 🤙 👈 👉 👆 🖕 👇 ☝️ 👍 👎 ✊ 👊 🤛 🤜 👏 🙌 👐 🤲 🙏 ✍️ 💅 💪 🦾 🧠 🫀 🫁 👀 👁️ 👅 👄 💋',
+  '❤️ 🧡 💛 💚 💙 💜 🖤 🤍 🤎 💔 ❤️‍🔥 ❤️‍🩹 💕 💞 💓 💗 💖 💘 💝 💟 💯 🔥 ✨ 🌟 ⭐ 💫 💥 💢 💦 💨 💬 🗨️ 🗯️ 💭 💤 🎉 🎊 🎈 🎁 🏆 🥇 🥈 🥉',
+  '✅ ☑️ ✔️ ❌ ❎ ➕ ➖ ➗ ✖️ ❓ ❔ ❕ ❗ 〰️ ⚠️ 🚫 ⛔ ♻️ 🔰 🆗 🆕 🆙 🆒 🆓 🆚 🈯 🔒 🔓 🔔 🔕 📢 📣 📌 📎 💡 ⏰ ⏳',
+  '🌈 ☀️ 🌤️ ⛅ 🌧️ ⛈️ ❄️ ☃️ 🌙 🌛 🌜 🌟 🌊 🍎 🍊 🍋 🍌 🍉 🍇 🍓 🫐 🍒 🍑 🥭 🍍 🥝 🍅 🥑 🍔 🍟 🍕 🌭 🍿 🧋 ☕ 🍺 🍻 🥂 🍰 🍫 🍭',
+  '🐶 🐱 🐭 🐹 🐰 🦊 🐻 🐼 🐨 🐯 🦁 🐮 🐷 🐸 🐵 🐔 🐧 🐦 🦄 🐝 🦋 🐢 🐬 🐳 🐟 🐙 🦕 🚀 ✈️ 🚗 🚕 🚌 🚲 🛵 🏠 🏢 🏫 🏥 🎮 🎲 🎯 🎵 🎶 🎤 🎧 🎬 📷',
+].join(' ').split(' ')
+const EMOJI_BATCH = 64
+const STICKER_BATCH = 24
 const AVATAR_PRESETS = ['#34c759', '#007aff', '#ff9500', '#ff2d55', '#af52de', '#5ac8fa', '#5856d6', '#8e8e93']
 // GIF 头像可动态同步的上限：base64 dataUrl ≤ 32KB（约 24KB 文件），与 UDP 广播包预算一致；超过则转静态
 const ANIMATED_GIF_MAX_CHARS = 32 * 1024
@@ -186,16 +195,26 @@ function SettingsCard ({ title, icon: Icon, danger, children }) {
     </div>
   )
 }
-function Overlay ({ children, onClose }) {
-  return <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/40 p-6" onClick={onClose}><div onClick={(e) => e.stopPropagation()} className="max-h-full overflow-auto">{children}</div></div>
+function Overlay ({ children, onClose, closeOnBackdrop = true }) {
+  return (
+    <div
+      className="floating-overlay"
+      onClick={closeOnBackdrop ? onClose : undefined}
+      role="presentation"
+    >
+      <div onClick={(e) => e.stopPropagation()} className="floating-overlay-inner">
+        {children}
+      </div>
+    </div>
+  )
 }
 function ConfirmDialog ({ title, text, confirmText = '确认', onConfirm, onClose }) {
   return (
-    <Overlay onClose={onClose}>
-      <div className="w-80 glass-panel rounded-2xl p-5">
-        <div className="text-sm font-semibold txt">{title}</div>
-        <div className="mt-2 text-xs txt-dim leading-relaxed">{text}</div>
-        <div className="mt-4 flex justify-end gap-2">
+    <Overlay onClose={onClose} closeOnBackdrop={false}>
+      <div className="floating-dialog floating-dialog-sm floating-surface glass-panel floating-dialog-pad" role="alertdialog" aria-modal="true" aria-label={title}>
+        <div className="text-sm font-semibold txt floating-long-text">{title}</div>
+        <div className="mt-2 floating-subtle floating-long-text">{text}</div>
+        <div className="floating-actions">
           <button onClick={onClose} className="btn-ghost text-sm rounded-lg px-3 py-1.5">取消</button>
           <button onClick={onConfirm} className="bg-red-500 text-white text-sm rounded-lg px-3 py-1.5">{confirmText}</button>
         </div>
@@ -309,7 +328,7 @@ function FileMsg ({ m, progress, onAccept, onReject, onCancel, onRetry, selfAvat
   )
 }
 
-function BatchMsg ({ items, markdown, showName, selfAvatar, peerAvatar, progressMap, flashMid, onCtx, avatarSpacer, hideMeta, metaReactions }) {
+function BatchMsg ({ items, markdown, showName, selfAvatar, peerAvatar, progressMap, flashMid, onCtx, avatarSpacer, hideMeta, metaReactions, mentionNames }) {
   const first = items[0]
   const selfMsg = !!first.self
   const texts = items.filter((x) => x.type !== 'file' && x.type !== 'file-offer' && x.text)
@@ -369,7 +388,7 @@ function BatchMsg ({ items, markdown, showName, selfAvatar, peerAvatar, progress
           <div className={'rounded-2xl px-3 py-2 text-sm ' + (selfMsg ? 'bubble-self' : 'bubble-other')}>
             {showName && <div className="text-[11px] font-medium accent-txt mb-0.5">{first.name}</div>}
             {texts.map((t) => (
-              <div key={t.mid} {...ctxProps(t)} className={'whitespace-pre-wrap break-words ' + (flashMid === t.mid ? 'msg-flash' : '')}>{renderRich(t.text || '', markdown)}</div>
+              <div key={t.mid} {...ctxProps(t)} className={'whitespace-pre-wrap break-words ' + (flashMid === t.mid ? 'msg-flash' : '')}>{renderRich(t.text || '', markdown, mentionNames)}</div>
             ))}
           </div>
         )}
@@ -403,7 +422,49 @@ function mergeMessageReactions (units) {
 const REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏', '🔥', '🎉']
 function openUrl (u) { if (api && api.sys) api.sys.openExternal(u) }
 
-function renderRich (text, markdown) {
+function cleanMentionName (name) {
+  return String(name || '').trim().replace(/[，,。.!！?？:：;；）)]$/g, '')
+}
+
+function textMentionsNames (text, names) {
+  const set = new Set((names || []).map((x) => cleanMentionName(x)).filter(Boolean))
+  if (!set.size) return false
+  const tokens = String(text || '').match(/@[^\s@]{1,32}/g) || []
+  return tokens.some((tok) => {
+    const name = cleanMentionName(tok.slice(1))
+    const low = name.toLowerCase()
+    for (const it of set) {
+      if (name === it || low === it.toLowerCase()) return true
+    }
+    return false
+  })
+}
+
+function isShareEntryMessage (m) {
+  return !!(m && m.share && m.share.type === 'share-entry')
+}
+
+function localizeMentionToken (tok, mentionNames) {
+  const raw = String(tok || '').slice(1)
+  const base = cleanMentionName(raw)
+  const suffix = raw.slice(base.length)
+  const shown = (mentionNames && mentionNames[base]) || base
+  return '@' + shown + suffix
+}
+
+function localizeMentionsText (text, mentionNames) {
+  if (!mentionNames) return text || ''
+  return String(text || '').replace(/@[^\s@]{1,32}/g, (tok) => localizeMentionToken(tok, mentionNames))
+}
+
+function localizeKnownNamesText (text, names) {
+  let out = String(text || '')
+  const entries = Object.entries(names || {}).filter(([from, to]) => from && to && from !== to).sort((a, b) => b[0].length - a[0].length)
+  for (const [from, to] of entries) out = out.split(from).join(to)
+  return out
+}
+
+function renderRich (text, markdown, mentionNames) {
   const out = []
   let key = 0
   const re = markdown
@@ -415,7 +476,7 @@ function renderRich (text, markdown) {
     if (mt.index > last) out.push(<span key={key++}>{text.slice(last, mt.index)}</span>)
     const tok = mt[0]
     if (/^https?:\/\//.test(tok)) out.push(<a key={key++} onClick={() => openUrl(tok)} className="underline cursor-pointer break-all">{tok}</a>)
-    else if (tok[0] === '@') out.push(<span key={key++} className="mention">{tok}</span>)
+    else if (tok[0] === '@') out.push(<span key={key++} className="mention">{localizeMentionToken(tok, mentionNames)}</span>)
     else if (markdown && tok.startsWith('**')) out.push(<strong key={key++}>{tok.slice(2, -2)}</strong>)
     else if (markdown && tok[0] === '`') out.push(<code key={key++} className="px-1 rounded" style={{ background: 'rgba(0,0,0,0.2)' }}>{tok.slice(1, -1)}</code>)
     else if (markdown && tok[0] === '*') out.push(<em key={key++}>{tok.slice(1, -1)}</em>)
@@ -452,7 +513,7 @@ function MsgStatus ({ m, onRetry }) {
   return null
 }
 
-function Bubble ({ m, now, showName, markdown, selectMode, selected, onToggleSelect, selfAvatar, peerAvatar, avatarSpacer, hideMeta, metaReactions, onRetry }) {
+function Bubble ({ m, now, showName, markdown, selectMode, selected, onToggleSelect, selfAvatar, peerAvatar, avatarSpacer, hideMeta, metaReactions, onRetry, mentionNames }) {
   // 阅后即焚：剩余时间占比(0~1)，用于进度条展示
   const burnTotal = (m.ttl || 10) * 1000
   const burnFrac = m.burn ? Math.max(0, Math.min(1, (m.ts + burnTotal - now) / burnTotal)) : 0
@@ -469,9 +530,9 @@ function Bubble ({ m, now, showName, markdown, selectMode, selected, onToggleSel
       <div className="message-stack max-w-[75%]">
       <div className={'rounded-2xl px-3 py-2 text-sm ' + cls}>
         {showName && <div className="text-[11px] font-medium accent-txt mb-0.5">{m.name}</div>}
-        {m.fwd && <div className="text-[10.5px] opacity-75 mb-0.5 inline-flex items-center gap-1"><Forward size={10} /> 转发自 {m.fwd.name}{m.fwd.count ? `（共 ${m.fwd.count} 条）` : ''}</div>}
-        {m.reply && <div className="mb-1 px-2 py-1 rounded-lg text-[11px] opacity-80" style={{ borderLeft: '2px solid var(--accent)', background: 'rgba(0,0,0,0.12)' }}><span className="font-medium">{m.reply.name}</span>:{m.reply.text}</div>}
-        <div className="whitespace-pre-wrap break-words">{m.recalled ? <span className="italic opacity-60">[已撤回]</span> : renderRich(m.text || '', markdown)}</div>
+        {m.fwd && <div className="text-[10.5px] opacity-75 mb-0.5 inline-flex items-center gap-1"><Forward size={10} /> 转发自 {localizeKnownNamesText(m.fwd.name, mentionNames)}{m.fwd.count ? `（共 ${m.fwd.count} 条）` : ''}</div>}
+        {m.reply && <div className="mb-1 px-2 py-1 rounded-lg text-[11px] opacity-80" style={{ borderLeft: '2px solid var(--accent)', background: 'rgba(0,0,0,0.12)' }}><span className="font-medium">{localizeKnownNamesText(m.reply.name, mentionNames)}</span>:{localizeMentionsText(m.reply.text, mentionNames)}</div>}
+        <div className="whitespace-pre-wrap break-words">{m.recalled ? <span className="italic opacity-60">[已撤回]</span> : renderRich(m.text || '', markdown, mentionNames)}</div>
         {m.burn && <span className="burn-bar burn-bar-bubble"><span className="burn-bar-fill" style={{ width: (burnFrac * 100) + '%' }} /></span>}
       </div>
       {!hideMeta && (
@@ -483,6 +544,44 @@ function Bubble ({ m, now, showName, markdown, selectMode, selected, onToggleSel
           <MsgStatus m={m} onRetry={onRetry} />
         </div>
       )}
+      </div>
+      {m.self && avEl}
+    </div>
+  )
+}
+
+function ShareEntryMsg ({ m, showName, onOpen, selfAvatar, peerAvatar, avatarSpacer, hideMeta, metaReactions, onRetry }) {
+  const sh = m.share || {}
+  const isFolder = sh.entryType === 'folder'
+  const avatarName = m.self ? '?' : (m.name || '')
+  const avatarId = m.self ? (m.from || 'self') : (m.from || m.name || '')
+  const avatarData = m.self ? selfAvatar : (peerAvatar || m.avatar)
+  const rx = metaReactions !== undefined ? metaReactions : (m.reactions || {})
+  const avEl = avatarSpacer ? <span className="avatar-spacer" /> : <Avatar name={avatarName} id={avatarId} avatar={avatarData} size={34} />
+  const path = (sh.breadcrumb || []).map((x) => x && x.name).filter(Boolean).join(' / ')
+  return (
+    <div className={'group message-row ' + (m.self ? 'message-row-self' : 'message-row-other')}>
+      {!m.self && avEl}
+      <div className="message-stack max-w-[75%]">
+        {showName && <div className="text-[11px] font-medium accent-txt">{m.name}</div>}
+        <button type="button" onClick={() => onOpen && onOpen(sh)} className={'share-entry-card ' + (m.self ? 'share-entry-card-self' : '')} title="打开群空间对应位置">
+          <span className="share-entry-icon">{isFolder ? <Folder size={18} /> : <FileIcon size={18} />}</span>
+          <span className="min-w-0 flex-1 text-left">
+            <span className="block text-[10.5px] txt-dim truncate">{sh.spaceName || '群文件'}</span>
+            <span className="block text-sm font-medium txt truncate">{sh.name || '群空间内容'}</span>
+            <span className="block text-[11px] txt-dim truncate">{isFolder ? '文件夹' : fmtSize(sh.size || 0)}{path ? ' · ' + path : ''}</span>
+          </span>
+          <ChevronRight size={15} className="txt-dim shrink-0" />
+        </button>
+        {!hideMeta && (
+          <div className="message-meta">
+            {Object.keys(rx).length > 0 && (
+              <div className="message-reactions">{Object.entries(rx).map(([e, ids]) => <span key={e} className="message-reaction">{e} {ids.length}</span>)}</div>
+            )}
+            <span className="message-time">{fmtTime(m.ts)}</span>
+            <MsgStatus m={m} onRetry={onRetry} />
+          </div>
+        )}
       </div>
       {m.self && avEl}
     </div>
@@ -566,12 +665,12 @@ function ProfileDialog ({ person, editable, settings, onPatchSettings, onRename,
   async function save () { await onRename(draft); setEditing(false) }
   return (
     <Overlay onClose={onClose}>
-      <div className={(editable ? 'w-96' : 'w-72') + ' glass-panel rounded-2xl p-6 text-center'}>
+      <div className={(editable ? 'floating-dialog-md' : 'floating-dialog-sm') + ' floating-dialog floating-surface glass-panel floating-dialog-pad text-center'} role="dialog" aria-modal="true" aria-label={editable ? '我的资料' : '联系人资料'}>
         {/* 头像：自己且为图片头像时显示拖拽裁剪，否则普通展示 */}
         {editable && avatar.type === 'image' && avatar.imageDataUrl ? (
           <div className="flex justify-center"><AvatarCropper avatar={avatar} onChange={patchAvatar} /></div>
         ) : (
-          <div className="flex justify-center"><Avatar name={person.name} id={person.id} avatar={avatar} size={editable ? 96 : 64} /></div>
+          <div className="flex justify-center"><Avatar name={person.remark || person.name} id={person.id} avatar={avatar} size={editable ? 96 : 64} /></div>
         )}
         {editable && (
           <div className="mt-3 flex flex-wrap justify-center gap-2">
@@ -733,8 +832,8 @@ function SettingsPanel ({ settings, onPatch, onClose, onLock, onReset, onClearHi
   }
   return (
     <Overlay onClose={onClose}>
-      <div className="w-[720px] max-w-[92vw] glass-panel rounded-2xl overflow-hidden flex flex-col" style={{ height: '78vh', maxHeight: 640 }}>
-        <div className="flex items-center justify-between px-5 border-b bd-soft shrink-0" style={{ height: 52 }}>
+      <div className="floating-dialog floating-dialog-xl floating-surface glass-panel overflow-hidden" style={{ height: '78vh', maxHeight: 640 }} role="dialog" aria-modal="true" aria-label="设置">
+        <div className="floating-titlebar justify-between">
           <h2 className="text-sm font-semibold txt inline-flex items-center gap-2"><Settings size={16} /> 设置</h2>
           <button onClick={onClose} className="icon-btn"><X size={16} /></button>
         </div>
@@ -780,7 +879,7 @@ function SettingsPanel ({ settings, onPatch, onClose, onLock, onReset, onClearHi
                 <Row label="正在输入"><Toggle on={s.showTyping !== false} onClick={() => onPatch({ showTyping: !(s.showTyping !== false) })} /></Row>
                 <Row label="发送键"><select value={s.sendKey || 'enter'} onChange={(e) => onPatch({ sendKey: e.target.value })} className="field rounded px-2 py-1 text-sm"><option value="enter">Enter</option><option value="ctrlEnter">Ctrl+Enter</option></select></Row>
                 <Row label="Markdown 渲染" hint="**bold** *italic* `code`"><Toggle on={!!s.markdown} onClick={() => onPatch({ markdown: !s.markdown })} /></Row>
-                <Row label="最小化到托盘"><Toggle on={s.minimizeToTray !== false} onClick={() => onPatch({ minimizeToTray: !(s.minimizeToTray !== false) })} /></Row>
+                <Row label="最小化行为" hint="最小化时保留任务栏卡片，托盘图标仍可打开主窗口"><span className="text-xs txt-dim">收起到任务栏</span></Row>
                 <Row label="关闭主窗口时"><select value={s.closeAction || 'ask'} onChange={(e) => onPatch({ closeAction: e.target.value })} className="field rounded px-2 py-1 text-sm"><option value="ask">询问</option><option value="tray">最小化到托盘</option><option value="quit">退出程序</option></select></Row>
                 <Row label="开机自启" hint="开机时自动启动"><Toggle on={!!s.autoStart} onClick={() => onPatch({ autoStart: !s.autoStart })} /></Row>
               </SettingsCard>
@@ -878,7 +977,6 @@ function GroupMemberList ({ room, members, peers, selfId, onMemberClick, onAddMe
   const onlineCount = members.filter((p) => p.online).length
   const memberIds = new Set(members.map((p) => p.id))
   const isMember = !!selfId && memberIds.has(selfId)
-  const canKick = !!selfId && room.ownerId === selfId
   const needle = query.trim().toLowerCase()
   // 展示全部非成员用户（在线 + 离线联系人），排序：在线 > 离线 > 名字；useMemo 避免每次渲染重排
   const candidates = useMemo(() => {
@@ -977,7 +1075,6 @@ function GroupMemberList ({ room, members, peers, selfId, onMemberClick, onAddMe
                 <div className="text-[10px]" style={{ color: presenceOf(p).color }}>{isOwner ? '群主 · ' : ''}{presenceOf(p).label}</div>
               </div>
               </button>
-              {canKick && !isOwner && !p.self && <button onClick={() => onKickMember && onKickMember(p)} className="btn-ghost text-[11px] rounded-md px-2 py-1 shrink-0 text-red-400">移出</button>}
             </div>
           )
         })}
@@ -986,9 +1083,9 @@ function GroupMemberList ({ room, members, peers, selfId, onMemberClick, onAddMe
   )
 }
 
-function DetailPane ({ active, activePeer, activeRoom, roomMembers, peers, self, searchPane, convos, convTitle, locateMessage, onOpenFile, onCloseSearch, onMemberClick, onAddMember, onKickMember, onOpenProfile }) {
+function DetailPane ({ active, activePeer, activeRoom, roomMembers, peers, self, searchPane, convos, convTitle, locateMessage, onOpenFile, onCloseSearch, onMemberClick, onAddMember, onKickMember, onOpenProfile, displayNameForId, mentionNames }) {
   if (searchPane) {
-    return <SearchPane key={searchPane} defaultScope={searchPane === 'global' ? 'all' : 'current'} convos={convos} convTitle={convTitle} activeConv={active} onLocate={locateMessage} onOpenFile={onOpenFile} onClose={onCloseSearch} />
+    return <SearchPane key={searchPane} defaultScope={searchPane === 'global' ? 'all' : 'current'} convos={convos} convTitle={convTitle} activeConv={active} onLocate={locateMessage} onOpenFile={onOpenFile} onClose={onCloseSearch} displayNameForId={displayNameForId} mentionNames={mentionNames} />
   }
   if (activeRoom) {
     return <GroupMemberList room={activeRoom} members={roomMembers} peers={peers} selfId={self && self.id} onMemberClick={onMemberClick} onAddMember={onAddMember} onKickMember={onKickMember} />
@@ -1003,9 +1100,9 @@ function DetailPane ({ active, activePeer, activeRoom, roomMembers, peers, self,
         {activePeer ? (
           <div className="space-y-4">
             <div className="flex flex-col items-center text-center gap-2">
-              <Avatar name={activePeer.name} id={activePeer.id} size={64} dim={!activePeer.online} avatar={activePeer.avatar} />
+              <Avatar name={(activePeer.remark || activePeer.name)} id={activePeer.id} size={64} dim={!activePeer.online} avatar={activePeer.avatar} />
               <div className="min-w-0">
-                <div className="text-base font-semibold txt truncate">{activePeer.name}</div>
+                <div className="text-base font-semibold txt truncate">{activePeer.remark || activePeer.name}</div>
                 <div className="text-xs" style={{ color: presenceOf(activePeer).color }}>{presenceOf(activePeer).label}</div>
               </div>
               {activePeer.status && <div className="text-xs txt-dim rounded-lg px-3 py-2 w-full" style={{ background: 'var(--hover)' }}>{activePeer.status}</div>}
@@ -1028,7 +1125,7 @@ function DetailPane ({ active, activePeer, activeRoom, roomMembers, peers, self,
 }
 
 // 聊天搜索侧栏：可搜索聊天记录与文件，点击定位到聊天框相应位置
-function SearchPane ({ convos, convTitle, activeConv, onLocate, onOpenFile, onClose, defaultScope }) {
+function SearchPane ({ convos, convTitle, activeConv, onLocate, onOpenFile, onClose, defaultScope, displayNameForId, mentionNames }) {
   const [q, setQ] = useState('')
   const [tab, setTab] = useState('all')
   const [scope, setScope] = useState(defaultScope || 'current')
@@ -1044,8 +1141,8 @@ function SearchPane ({ convos, convTitle, activeConv, onLocate, onOpenFile, onCl
         const isFile = m.type === 'file' || m.type === 'file-offer'
         if (tab === 'msg' && isFile) continue
         if (tab === 'file' && !isFile) continue
-        const body = isFile ? (m.fname || '') : (m.text || '')
-        const sender = m.self ? '我' : (m.name || '')
+        const body = isFile ? (m.fname || '') : localizeMentionsText(m.text || '', mentionNames)
+        const sender = m.self ? '我' : (displayNameForId ? displayNameForId(m.from, m.name || '') : (m.name || ''))
         const hay = (body + ' ' + sender + ' ' + convTitle(conv)).toLowerCase()
         if (!needle || hay.includes(needle)) results.push({ conv, m, isFile, body, sender })
       }
@@ -1165,7 +1262,7 @@ function SearchPane ({ convos, convTitle, activeConv, onLocate, onOpenFile, onCl
 
 // ---------------------------------------------------------------------------
 // 历史记录面板：按日期分组浏览当前会话全部消息
-function HistoryPanel ({ title, messages, selfName, selfAvatar, onLocate, onOpenFile, onClose }) {
+function HistoryPanel ({ title, messages, selfName, selfAvatar, onLocate, onOpenFile, onClose, displayNameForId, mentionNames }) {
   const [q, setQ] = useState('')
   const [tab, setTab] = useState('all')
   const [limit, setLimit] = useState(100)
@@ -1180,8 +1277,8 @@ function HistoryPanel ({ title, messages, selfName, selfAvatar, onLocate, onOpen
     if (tab === 'img' && !isImg) continue
     if (tab === 'file' && (!isFile || isImg)) continue
     if (needle) {
-      const sender = m.self ? (selfName || '我') : (m.name || '')
-      const hay = ((isFile ? (m.fname || '') : (m.text || '')) + ' ' + sender).toLowerCase()
+      const sender = m.self ? (selfName || '我') : (displayNameForId ? displayNameForId(m.from, m.name || '') : (m.name || ''))
+      const hay = ((isFile ? (m.fname || '') : localizeMentionsText(m.text || '', mentionNames)) + ' ' + sender).toLowerCase()
       if (!hay.includes(needle)) continue
     }
     filtered.push(m)
@@ -1192,8 +1289,8 @@ function HistoryPanel ({ title, messages, selfName, selfAvatar, onLocate, onOpen
 
   return (
     <Overlay onClose={onClose}>
-      <div className="w-[620px] max-w-[92vw] glass-panel rounded-2xl overflow-hidden flex flex-col" style={{ height: '80vh', maxHeight: 680 }}>
-        <div className="flex items-center gap-2 px-5 border-b bd-soft shrink-0" style={{ height: 54 }}>
+      <div className="floating-dialog floating-dialog-lg floating-surface glass-panel overflow-hidden" style={{ height: '80vh', maxHeight: 680 }} role="dialog" aria-modal="true" aria-label="历史记录">
+        <div className="floating-titlebar">
           <History size={16} className="accent-txt shrink-0" />
           <span className="text-sm font-semibold txt truncate">历史记录</span>
           <span className="text-xs txt-dim truncate">· {title}</span>
@@ -1236,7 +1333,7 @@ function HistoryPanel ({ title, messages, selfName, selfAvatar, onLocate, onOpen
             lastDayLabel = day
             const isFile = m.type === 'file' || m.type === 'file-offer'
             const isImg = isFile && m.mime && m.mime.indexOf('image/') === 0
-            const sender = m.self ? (selfName || '我') : (m.name || '用户')
+            const sender = m.self ? (selfName || '我') : (displayNameForId ? displayNameForId(m.from, m.name || '用户') : (m.name || '用户'))
 
             return (
               <div key={m.mid}>
@@ -1263,7 +1360,7 @@ function HistoryPanel ({ title, messages, selfName, selfAvatar, onLocate, onOpen
                         {m.path && <span onClick={(e) => { e.stopPropagation(); onOpenFile(m.path) }} className="text-[10px] accent-txt hover:underline shrink-0 cursor-pointer">打开</span>}
                       </span>
                     ) : (
-                      <span className="block mt-0.5 text-[12.5px] txt-dim leading-relaxed" style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{m.text}</span>
+                      <span className="block mt-0.5 text-[12.5px] txt-dim leading-relaxed" style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{localizeMentionsText(m.text, mentionNames)}</span>
                     )}
                   </span>
                 </button>
@@ -1463,41 +1560,11 @@ function ShotScreen () {
   )
 }
 
-// ============ 群共享空间面板（极简展示，详情走悬浮提示）============
+// ============ 群文件面板（极简展示，详情走悬浮提示）============
 function fmtShareTime (ts) {
   if (!ts) return ''
   const d = new Date(ts); const p = (n) => String(n).padStart(2, '0')
   return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes())
-}
-
-function ShareHistoryDialog ({ space, entry, onClose, onDownload }) {
-  const [data, setData] = useState(null)
-  const [busy, setBusy] = useState('')
-  useEffect(() => { let on = true; api.share.history(space.spaceId, entry.entryId).then((r) => { if (on) setData(r) }); return () => { on = false } }, [space.spaceId, entry.entryId])
-  return (
-    <Overlay onClose={onClose}>
-      <div className="w-[460px] glass-panel rounded-2xl p-5">
-        <div className="flex items-center justify-between mb-3">
-          <div className="text-sm font-semibold txt truncate">历史版本 · {entry.name}</div>
-          <button onClick={onClose} className="icon-btn"><X size={15} /></button>
-        </div>
-        {!data ? <div className="text-xs txt-dim py-6 text-center">加载中…</div>
-          : !data.ok ? <div className="text-xs text-red-500 py-6 text-center">{data.error || '无法获取'}</div>
-            : (
-              <div className="max-h-80 overflow-auto divide-y bd-soft">
-                {data.versions.map((v) => (
-                  <div key={v.versionId} className="flex items-center gap-2 py-2 text-xs" title={'SHA-256: ' + v.fileHash + '\n上传者: ' + v.uploadedBy + '\n时间: ' + fmtShareTime(v.uploadedAt)}>
-                    <span className="w-10 shrink-0 accent-txt font-medium">{v.versionNo === 0 ? '原始' : 'V' + String(v.versionNo).padStart(2, '0')}</span>
-                    <span className="flex-1 min-w-0 truncate">{v.versionFileName}</span>
-                    <span className="txt-dim shrink-0">{fmtSize(v.fileSize)}</span>
-                    <button disabled={busy === v.versionId} onClick={async () => { setBusy(v.versionId); await onDownload(entry, v.versionId); setBusy('') }} className="icon-btn shrink-0" title="下载此版本"><Download size={14} /></button>
-                  </div>
-                ))}
-              </div>
-            )}
-      </div>
-    </Overlay>
-  )
 }
 
 // Electron 渲染进程不支持 window.prompt，统一用应用内输入框
@@ -1506,10 +1573,10 @@ function ShareInputDialog ({ title, placeholder, initial, onOk, onClose }) {
   const submit = () => { if (v.trim()) { onOk(v.trim()); onClose() } }
   return (
     <Overlay onClose={onClose}>
-      <div className="w-80 glass-panel rounded-2xl p-5">
-        <div className="text-sm font-semibold txt mb-3">{title}</div>
+      <div className="floating-dialog floating-dialog-sm floating-surface glass-panel floating-dialog-pad" role="dialog" aria-modal="true" aria-label={title}>
+        <div className="text-sm font-semibold txt mb-3 floating-long-text">{title}</div>
         <input autoFocus value={v} placeholder={placeholder || ''} onChange={(e) => setV(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') submit() }} className={FIELD} />
-        <div className="mt-4 flex justify-end gap-2">
+        <div className="floating-actions">
           <button onClick={onClose} className="btn-ghost text-xs rounded-lg px-3 py-1.5">取消</button>
           <button onClick={submit} className="btn-primary text-xs rounded-lg px-3 py-1.5">确定</button>
         </div>
@@ -1518,7 +1585,7 @@ function ShareInputDialog ({ title, placeholder, initial, onOk, onClose }) {
   )
 }
 
-function ShareSpacePanel ({ room, self, peers, nameById, onClose }) {
+function ShareSpacePanel ({ room, self, peers, nameById, onClose, requestConfirm, onForwardEntry, initialTarget }) {
   const [spaces, setSpaces] = useState([])
   const [space, setSpace] = useState(null)
   const [parentId, setParentId] = useState('root')
@@ -1528,26 +1595,95 @@ function ShareSpacePanel ({ room, self, peers, nameById, onClose }) {
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState('')
   const [newDir, setNewDir] = useState('')
-  const [history, setHistory] = useState(null)
   const [sortKey, setSortKey] = useState('name')
   const [search, setSearch] = useState('')
-  const [menu, setMenu] = useState(null)
+  const [globalSearch, setGlobalSearch] = useState('')
+  const [globalResults, setGlobalResults] = useState([])
+  const [globalSearching, setGlobalSearching] = useState(false)
+  const [spaceResults, setSpaceResults] = useState([])
+  const [spaceSearching, setSpaceSearching] = useState(false)
   const [conflict, setConflict] = useState(null)
   const [inputDlg, setInputDlg] = useState(null)
+  const [progress, setProgress] = useState(null) // 上传/下载进度 { pct, dir }
+  const [uploadBatch, setUploadBatch] = useState(null) // 多文件上传计数 { done, total }
+  const [selected, setSelected] = useState({}) // 已选文件/文件夹 entryId -> true
   const queueRef = useRef([])
+  const queueTargetRef = useRef('root') // 当前上传队列的目标目录
+  const uploadTotalRef = useRef(0)
+  const uploadDoneRef = useRef(0)
+  const uploadFolderActiveRef = useRef(false)
+  const targetKeyRef = useRef('')
+  const locatingTargetRef = useRef(false)
   const spaceRef = useRef(null); spaceRef.current = space
   const parentRef = useRef('root'); parentRef.current = parentId
+  const currentSpaceId = space ? space.spaceId : ''
 
   const nameOf = (id) => (id === (self && self.id) ? '我' : ((nameById && nameById[id]) || (peers.find((p) => p.id === id) || {}).name || String(id || '').slice(0, 6)))
 
   async function refreshSpaces () { const list = await api.share.list(room.id); setSpaces(list || []) }
   useEffect(() => { refreshSpaces() }, [room.id])
   useEffect(() => {
+    const t = initialTarget
+    if (!t || !t.spaceId || !spaces.length) return
+    const key = [t.nonce || '', t.spaceId, t.entryId || '', t.parentId || ''].join(':')
+    if (targetKeyRef.current === key) return
+    targetKeyRef.current = key
+    const sp = spaces.find((x) => x.spaceId === t.spaceId)
+    if (!sp) { setMsg('群文件不存在或已删除'); return }
+    ;(async () => {
+      locatingTargetRef.current = true
+      setSpace(sp)
+      setSearch('')
+      const targetDir = t.entryType === 'folder' ? (t.entryId || 'root') : (t.parentId || 'root')
+      await loadDir(sp, targetDir, false)
+      setSelected(t.entryType === 'folder' || !t.entryId ? {} : { [t.entryId]: true })
+      if (t.name) setMsg('已定位：' + t.name)
+      setTimeout(() => { locatingTargetRef.current = false }, 0)
+    })()
+  }, [initialTarget, spaces])
+  useEffect(() => { if (!locatingTargetRef.current) setSelected({}) }, [parentId, space]) // 切换目录/空间时清空批量勾选（刷新不变 parentId 故保留）
+  useEffect(() => {
     const un = api.share.onChanged(() => { refreshSpaces(); if (spaceRef.current) loadDir(spaceRef.current, parentRef.current, true) })
-    const un2 = api.share.onDownloaded((d) => setMsg('已下载：' + d.fname))
-    const un3 = api.share.onDownloadFailed((d) => setMsg('下载失败：' + (d.error || '')))
-    return () => { un && un(); un2 && un2(); un3 && un3() }
+    const un2 = api.share.onDownloaded((d) => { setMsg('已下载：' + d.fname); setProgress(null) })
+    const un3 = api.share.onDownloadFailed((d) => { setMsg('下载失败：' + (d.error || '')); setProgress(null) })
+    const un4 = api.share.onProgress && api.share.onProgress((p) => {
+      if (p && p.op === 'uploadFolder') {
+        if (!uploadFolderActiveRef.current) return
+        setUploadBatch({ done: p.done || 0, total: p.total || 0, failed: p.failed || 0 })
+        setMsg('上传文件夹中… 已上传 ' + (p.done || 0) + '/' + (p.total || 0))
+        return
+      }
+      const pct = p.size ? Math.min(100, Math.round((p.received / p.size) * 100)) : 0
+      setProgress(pct >= 100 ? null : { pct, dir: p.dir })
+    })
+    return () => { un && un(); un2 && un2(); un3 && un3(); un4 && un4() }
   }, [])
+  useEffect(() => {
+    const q = globalSearch.trim()
+    if (space || !q || !api.share.search) { setGlobalResults([]); setGlobalSearching(false); return undefined }
+    let alive = true
+    setGlobalSearching(true)
+    const timer = setTimeout(async () => {
+      const r = await api.share.search(room.id, q)
+      if (!alive) return
+      setGlobalResults((r && r.ok && r.results) || [])
+      setGlobalSearching(false)
+    }, 220)
+    return () => { alive = false; clearTimeout(timer) }
+  }, [globalSearch, room.id, space])
+  useEffect(() => {
+    const q = search.trim()
+    if (!currentSpaceId || !q || !api.share.search) { setSpaceResults([]); setSpaceSearching(false); return undefined }
+    let alive = true
+    setSpaceSearching(true)
+    const timer = setTimeout(async () => {
+      const r = await api.share.search(room.id, q, currentSpaceId)
+      if (!alive) return
+      setSpaceResults((r && r.ok && r.results) || [])
+      setSpaceSearching(false)
+    }, 220)
+    return () => { alive = false; clearTimeout(timer) }
+  }, [search, room.id, currentSpaceId])
 
   async function loadDir (sp, pid, silent) {
     if (!silent) { setLoading(true); setMsg('') }
@@ -1555,9 +1691,29 @@ function ShareSpacePanel ({ room, self, peers, nameById, onClose }) {
     setLoading(false)
     if (r && (r.ok || r.entries)) { setDir(r); setParentId(r.parentId || pid) }
     else { setDir({ entries: [], breadcrumb: [{ entryId: 'root', name: '根目录' }], offline: r && r.offline, error: r && r.error }); if (r && r.error && !silent) setMsg(r.error) }
+    return r
   }
-  function openSpace (sp) { setSpace(sp); setParentId('root'); setSearch(''); loadDir(sp, 'root') }
+  function openSpace (sp) { setSpace(sp); setParentId('root'); setSearch(''); setGlobalSearch(''); loadDir(sp, 'root') }
   function back () { const bc = dir && dir.breadcrumb; if (bc && bc.length > 1) loadDir(space, bc[bc.length - 2].entryId) }
+  function searchResultPath (r) {
+    const crumbs = (r && Array.isArray(r.breadcrumb)) ? r.breadcrumb : []
+    const base = r && r.pathText ? r.pathText : crumbs.map((c) => c.name).join(' / ')
+    return base || (r && r.name) || ''
+  }
+  async function openSearchResult (r) {
+    if (!r) return
+    const sp = spaces.find((x) => x.spaceId === r.spaceId) || r.space
+    if (!sp) { setMsg('群文件不存在或已删除'); return }
+    locatingTargetRef.current = true
+    setSpace(sp)
+    setSearch('')
+    setGlobalSearch('')
+    const targetDir = r.type === 'folder' ? (r.entryId || 'root') : (r.parentId || 'root')
+    await loadDir(sp, targetDir, false)
+    setSelected(r.type === 'file' && r.entryId ? { [r.entryId]: true } : {})
+    setMsg('已定位：' + (r.name || ''))
+    setTimeout(() => { locatingTargetRef.current = false }, 0)
+  }
 
   async function createSpace () {
     const n = newName.trim()
@@ -1576,65 +1732,132 @@ function ShareSpacePanel ({ room, self, peers, nameById, onClose }) {
   }
   async function processQueue () {
     const q = queueRef.current
+    const target = queueTargetRef.current
     while (q.length) {
       const p = q[0]
-      const r = await api.share.upload(space.spaceId, parentId, [p], 'new')
+      setUploadBatch({ done: uploadDoneRef.current, total: uploadTotalRef.current })
+      setMsg('上传中… 已上传 ' + uploadDoneRef.current + '/' + uploadTotalRef.current)
+      const r = await api.share.upload(space.spaceId, target, [p])
       const res = r && r.results && r.results[0]
       if (res && res.conflict) { setConflict({ path: p, entryId: res.entryId, name: res.name }); return }
       q.shift()
-      if (res && !res.ok && !res.conflict) setMsg('上传失败：' + (res.error || res.offline && '主机离线' || ''))
+      if (res && res.ok) uploadDoneRef.current += 1
+      setUploadBatch({ done: uploadDoneRef.current, total: uploadTotalRef.current })
+      if (res && res.oversize) setMsg('「' + (res.name || '文件') + '」超过 5GB 上限，未上传')
+      else if (res && !res.ok && !res.conflict) setMsg('上传失败：' + (res.error || res.offline && '主机离线' || ''))
     }
-    setConflict(null); loadDir(space, parentId, true); setMsg('上传完成')
+    setConflict(null); setProgress(null); loadDir(space, parentId, true); setMsg('上传完成：已上传 ' + uploadDoneRef.current + '/' + uploadTotalRef.current); setUploadBatch(null)
+  }
+  function startFileUpload (target, paths) {
+    if (!paths || !paths.length) return
+    queueTargetRef.current = target || parentId
+    queueRef.current = paths.slice()
+    uploadTotalRef.current = paths.length
+    uploadDoneRef.current = 0
+    setUploadBatch({ done: 0, total: paths.length })
+    setMsg('上传中… 已上传 0/' + paths.length); processQueue()
   }
   async function uploadFiles () {
     const r = await api.share.pickFiles()
     if (!r || !r.ok) return
-    queueRef.current = r.paths.slice(); setMsg('上传中…'); processQueue()
+    startFileUpload(parentId, r.paths)
+  }
+  async function uploadFolderTo (target, dirPath) {
+    uploadFolderActiveRef.current = true
+    setUploadBatch({ done: 0, total: 0, failed: 0 })
+    setMsg('上传文件夹中… 已上传 0/0')
+    let res
+    try {
+      res = await api.share.uploadFolder(space.spaceId, target || parentId, dirPath)
+    } finally {
+      uploadFolderActiveRef.current = false
+    }
+    const ov = res && res.summary && res.summary.oversize ? '，' + res.summary.oversize + ' 个超 5GB 已跳过' : ''
+    if (res && res.ok) setMsg('文件夹上传完成：总文件数 ' + (res.summary.total || res.summary.files || 0) + ' · 已上传 ' + res.summary.files + '（' + res.summary.folders + ' 目录）')
+    else setMsg('文件夹上传：' + ((res && res.error) || (res && res.summary && ('总文件数 ' + (res.summary.total || 0) + ' · 已上传 ' + res.summary.files + '，失败/跳过 ' + res.summary.failed + ' 项' + ov)) || '失败'))
+    setProgress(null); setUploadBatch(null); loadDir(space, parentId, true)
   }
   async function uploadFolder () {
     const r = await api.share.pickFolder()
     if (!r || !r.ok) return
-    setMsg('上传文件夹中…')
-    const res = await api.share.uploadFolder(space.spaceId, parentId, r.path)
-    if (res && res.ok) setMsg('文件夹上传完成（' + res.summary.folders + ' 目录 / ' + res.summary.files + ' 文件）')
-    else setMsg('文件夹上传：' + ((res && res.error) || (res && res.summary && ('部分失败 ' + res.summary.failed + ' 项')) || '失败'))
-    loadDir(space, parentId, true)
+    uploadFolderTo(parentId, r.path)
   }
-  async function resolveConflict (mode) {
+  async function resolveConflictRename () {
     const c = conflict; setConflict(null)
-    if (mode === 'version') await api.share.upload(space.spaceId, parentId, [c.path], 'version', c.entryId)
-    else if (mode === 'rename') await api.share.upload(space.spaceId, parentId, [c.path], 'new', null, true)
+    const target = queueTargetRef.current
+    const r = await api.share.upload(space.spaceId, target, [c.path], true)
+    const res = r && r.results && r.results[0]
+    if (res && res.ok) uploadDoneRef.current += 1
+    setUploadBatch({ done: uploadDoneRef.current, total: uploadTotalRef.current })
     queueRef.current.shift()
     processQueue()
   }
-  async function download (entry, versionId) {
-    setMsg('下载中…')
-    const r = await api.share.download(space.spaceId, entry.entryId, versionId)
-    if (r && r.ok) setMsg('已下载：' + (r.fname || entry.name)); else setMsg('下载失败：' + ((r && r.error) || ''))
-  }
-  async function uploadVersion (entry) {
-    const r = await api.share.pickFiles()
-    if (!r || !r.ok) return
-    setMsg('上传新版本…')
-    const res = await api.share.upload(space.spaceId, parentId, [r.paths[0]], 'version', entry.entryId)
-    const one = res && res.results && res.results[0]
-    if (one && one.ok) { setMsg('新版本已上传：' + one.version.versionFileName); loadDir(space, parentId, true) } else setMsg('上传失败：' + ((one && one.error) || ''))
+  // 批量选择
+  function toggleSelect (id) { setSelected((s) => { const n = { ...s }; if (n[id]) delete n[id]; else n[id] = true; return n }) }
+  const selectedEntries = () => (dir && dir.entries || []).filter((e) => selected[e.entryId])
+  const selectedFolders = () => selectedEntries().filter((e) => e.type === 'folder')
+  function clearSelection () { setSelected({}) }
+  // 批量下载：选目标目录一次，逐个下载选中条目到该目录（文件夹保留目录结构）
+  async function downloadSelected () {
+    const entries = selectedEntries()
+    if (!entries.length) { setMsg('请先勾选要下载的文件或文件夹'); return }
+    const d = await api.share.chooseDir()
+    if (!d || !d.ok) return
+    let ok = 0; let fail = 0
+    for (let i = 0; i < entries.length; i++) {
+      const e = entries[i]
+      setMsg('下载中… ' + (i + 1) + '/' + entries.length + '：' + e.name)
+      const r = await api.share.download(space.spaceId, e.entryId, e.name, d.dir)
+      if (r && r.ok) ok++; else fail++
+    }
+    setProgress(null)
+    setMsg('下载完成：成功 ' + ok + (fail ? '，失败 ' + fail : '') + ' 项 → ' + d.dir)
+    clearSelection()
   }
   function rename (entry) {
+    if (!entry || entry.type !== 'folder') { setMsg('仅文件夹支持重命名'); return }
     setInputDlg({ title: '重命名', placeholder: '新名称', value: entry.name, onOk: async (nn) => {
       const r = await api.share.rename(space.spaceId, entry.entryId, nn)
-      if (r && r.ok) { setMsg('已重命名'); loadDir(space, parentId, true) } else setMsg((r && r.error) || '重命名失败')
+      if (r && r.ok) { setMsg('已重命名'); clearSelection(); loadDir(space, parentId, true) } else setMsg((r && r.error) || '重命名失败')
     } })
   }
-  async function remove (entry) {
-    if (!window.confirm('删除「' + entry.name + '」？将移入回收站（可在主机本地恢复）')) return
-    const r = await api.share.remove(space.spaceId, entry.entryId)
-    if (r && r.ok) { setMsg('已删除'); loadDir(space, parentId, true) } else setMsg((r && r.error) || '删除失败')
+  async function deleteSelected () {
+    const entries = selectedEntries()
+    if (!entries.length) { setMsg('请先勾选要删除的文件或文件夹'); return }
+    const hasFolder = entries.some((e) => e.type === 'folder')
+    const names = entries.slice(0, 3).map((e) => e.name).join('、') + (entries.length > 3 ? ' 等' : '')
+    const tip = hasFolder ? '删除文件夹会同时删除其下所有内容。' : ''
+    const run = async () => {
+      let ok = 0; let fail = 0
+      for (const e of entries) {
+        const r = await api.share.remove(space.spaceId, e.entryId)
+        if (r && r.ok) ok++; else fail++
+      }
+      setMsg('删除完成：成功 ' + ok + (fail ? '，失败 ' + fail : '') + ' 项')
+      clearSelection()
+      loadDir(space, parentId, true)
+    }
+    if (requestConfirm) {
+      requestConfirm({
+        title: '删除共享空间项目',
+        text: '删除选中的 ' + entries.length + ' 项「' + names + '」？' + tip + '删除后不可恢复。',
+        confirmText: '删除',
+        run,
+      })
+    } else {
+      await run()
+    }
+  }
+
+  async function forwardEntry (entry) {
+    if (!entry || !onForwardEntry) return
+    const res = await onForwardEntry(space, entry, parentId, (dir && dir.breadcrumb) || [])
+    if (res && res.ok) { setMsg('已转发到本群'); clearSelection() }
+    else setMsg((res && res.error) || '转发失败')
   }
 
   const sorted = useMemo(() => {
     let list = (dir && dir.entries) || []
-    if (search.trim()) { const q = search.trim().toLowerCase(); list = list.filter((e) => e.name.toLowerCase().includes(q)) }
     const dirsFirst = (a, b) => (a.type === b.type ? 0 : a.type === 'folder' ? -1 : 1)
     list = list.slice().sort((a, b) => dirsFirst(a, b) || (
       sortKey === 'size' ? (b.size || 0) - (a.size || 0)
@@ -1642,23 +1865,24 @@ function ShareSpacePanel ({ room, self, peers, nameById, onClose }) {
           : sortKey === 'type' ? String(a.ext).localeCompare(String(b.ext))
             : a.name.localeCompare(b.name, 'zh')))
     return list
-  }, [dir, search, sortKey])
+  }, [dir, sortKey])
+  const showingSpaceSearch = !!search.trim()
 
   // ---------- 列表页（未进入空间）----------
   if (!space) {
     return (
       <Overlay onClose={onClose}>
-        <div className="w-[560px] glass-panel rounded-2xl p-5">
+        <div className="floating-dialog floating-dialog-lg floating-surface glass-panel floating-dialog-pad" role="dialog" aria-modal="true" aria-label="群文件">
           <div className="flex items-center justify-between mb-3">
-            <div className="text-sm font-semibold txt flex items-center gap-2"><HardDrive size={16} className="accent-txt" /> 共享空间 · {room.name}</div>
+            <div className="text-sm font-semibold txt flex items-center gap-2"><HardDrive size={16} className="accent-txt" /> 群文件 · {room.name}</div>
             <div className="flex items-center gap-1">
-              <button onClick={() => setCreating((v) => !v)} className="icon-btn" title="新建共享空间"><Plus size={16} /></button>
+              <button onClick={() => setCreating((v) => !v)} className="icon-btn" title="新建群文件"><Plus size={16} /></button>
               <button onClick={onClose} className="icon-btn"><X size={15} /></button>
             </div>
           </div>
           {creating && (
             <div className="mb-3 p-3 rounded-xl bd-soft border space-y-2">
-              <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="共享空间名称" className={FIELD} />
+              <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="群文件名称" className={FIELD} />
               <div className="flex items-center gap-2">
                 <button onClick={chooseHostDir} className="btn-ghost text-xs rounded-lg px-2 py-1.5 shrink-0" title="可选：自定义本机存储目录，默认应用数据目录">选择存储目录</button>
                 <span className="text-[11px] txt-dim truncate flex-1" title={newDir}>{newDir || '默认：应用数据目录 group_shares/'}</span>
@@ -1670,12 +1894,31 @@ function ShareSpacePanel ({ room, self, peers, nameById, onClose }) {
               </div>
             </div>
           )}
+          <div className="relative mb-3">
+            <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 txt-dim" />
+            <input value={globalSearch} onChange={(e) => setGlobalSearch(e.target.value)} placeholder="全局搜索文件 / 文件夹" className="field w-full text-xs rounded-lg pl-8 pr-3 py-2" />
+          </div>
           {msg && <div className="mb-2 text-[11px] accent-txt">{msg}</div>}
-          {!spaces.length ? <div className="text-xs txt-dim py-8 text-center">还没有共享空间，点击右上角 + 创建</div>
+          {globalSearch.trim() ? (
+            <div className="space-y-1.5 max-h-[60vh] overflow-auto scroll pr-1">
+              {globalSearching ? <div className="text-xs txt-dim py-8 text-center">搜索中…</div>
+                : !globalResults.length ? <div className="text-xs txt-dim py-8 text-center">没有匹配的文件或文件夹</div>
+                  : globalResults.map((r) => (
+                    <button key={(r.spaceId || '') + ':' + r.entryId} onClick={() => openSearchResult(r)} className="w-full flex items-center gap-3 p-2.5 rounded-xl hover:bg-[var(--hover)] bd-soft border text-left">
+                      {r.type === 'folder' ? <Folder size={22} className="accent-txt shrink-0" /> : <FileIcon size={22} className="txt-dim shrink-0" />}
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-medium truncate">{r.name}</div>
+                        <div className="text-[11px] txt-dim truncate" title={(r.spaceName || '') + ' · ' + searchResultPath(r)}>{r.spaceName || '群文件'} · {searchResultPath(r)}{r.cached ? ' · 缓存' : ''}</div>
+                      </div>
+                      <span className="text-[11px] txt-dim shrink-0">{r.type === 'file' ? fmtSize(r.size) : '文件夹'}</span>
+                    </button>
+                  ))}
+            </div>
+          ) : !spaces.length ? <div className="text-xs txt-dim py-8 text-center">还没有群文件，点击右上角 + 创建</div>
             : (
-              <div className="space-y-1.5 max-h-[60vh] overflow-auto">
+              <div className="space-y-1.5 max-h-[60vh] overflow-auto scroll pr-1">
                 {spaces.map((sp) => (
-                  <div key={sp.spaceId} className="flex items-center gap-3 p-2.5 rounded-xl hover:bg-black/5 bd-soft border" title={'创建者: ' + nameOf(sp.createdBy) + '\n共享主机: ' + nameOf(sp.hostUserId) + '\n主机设备: ' + (sp.hostDeviceId || '-') + '\n创建时间: ' + fmtShareTime(sp.createdAt)}>
+                  <div key={sp.spaceId} className="flex items-center gap-3 p-2.5 rounded-xl hover:bg-[var(--hover)] bd-soft border" title={'创建者: ' + nameOf(sp.createdBy) + '\n共享主机: ' + nameOf(sp.hostUserId) + '\n主机设备: ' + (sp.hostDeviceId || '-') + '\n创建时间: ' + fmtShareTime(sp.createdAt)}>
                     <Folder size={26} className={sp.online ? 'accent-txt' : 'txt-dim'} />
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5 text-sm font-medium truncate">{sp.name}
@@ -1684,7 +1927,15 @@ function ShareSpacePanel ({ room, self, peers, nameById, onClose }) {
                       </div>
                       <div className="text-[11px] txt-dim truncate">主机 {nameOf(sp.hostUserId)} · {sp.fileCount || 0} 文件 · {fmtShareTime(sp.updatedAt) || '—'}</div>
                     </div>
-                    {(sp.hostUserId === (self && self.id) || (room.ownerId === (self && self.id))) && <button onClick={async () => { if (window.confirm('删除共享空间「' + sp.name + '」？')) { await api.share.deleteSpace(sp.spaceId); refreshSpaces() } }} className="icon-btn shrink-0" title="删除空间"><Trash2 size={14} /></button>}
+                    {sp.createdBy === (self && self.id) && <button onClick={() => {
+                      const run = async () => {
+                        const r = await api.share.deleteSpace(sp.spaceId)
+                        if (r && !r.ok && r.error) setMsg(r.error)
+                        refreshSpaces()
+                      }
+                      if (requestConfirm) requestConfirm({ title: '删除群文件', text: '删除群文件「' + sp.name + '」？删除后该共享空间将不可恢复。', confirmText: '删除', run })
+                      else run()
+                    }} className="icon-btn shrink-0" title="删除群文件（仅创建者）"><Trash2 size={14} /></button>}
                     <button onClick={() => openSpace(sp)} disabled={!sp.online} className="text-xs btn-primary rounded-lg px-3 py-1.5 shrink-0 disabled:opacity-40">进入</button>
                   </div>
                 ))}
@@ -1699,7 +1950,7 @@ function ShareSpacePanel ({ room, self, peers, nameById, onClose }) {
   const bc = (dir && dir.breadcrumb) || [{ entryId: 'root', name: '根目录' }]
   return (
     <Overlay onClose={onClose}>
-      <div className="w-[680px] h-[78vh] glass-panel rounded-2xl p-4 flex flex-col" onClick={() => setMenu(null)}>
+      <div className="floating-dialog floating-dialog-xl floating-surface glass-panel floating-dialog-pad flex flex-col" style={{ height: '78vh' }} role="dialog" aria-modal="true" aria-label="群文件目录">
         <div className="flex items-center gap-2 mb-2">
           <button onClick={() => { setSpace(null); setDir(null) }} className="icon-btn" title="返回空间列表"><ArrowLeft size={16} /></button>
           <div className="text-sm font-semibold txt flex items-center gap-1.5 min-w-0"><Folder size={15} className="accent-txt shrink-0" /><span className="truncate">{space.name}</span></div>
@@ -1718,57 +1969,74 @@ function ShareSpacePanel ({ room, self, peers, nameById, onClose }) {
           ))}
         </div>
 
-        <div className="flex items-center gap-1.5 mb-2">
+        <div className="flex items-center gap-1.5 mb-1.5 flex-wrap">
           <button onClick={back} disabled={bc.length <= 1} className="btn-ghost text-xs rounded-lg px-2 py-1.5 disabled:opacity-40 inline-flex items-center gap-1"><ArrowLeft size={13} />上级</button>
           <button onClick={newFolder} disabled={dir && dir.offline} className="btn-ghost text-xs rounded-lg px-2 py-1.5 disabled:opacity-40 inline-flex items-center gap-1"><FolderPlus size={13} />新建文件夹</button>
-          <button onClick={uploadFiles} disabled={dir && dir.offline} className="btn-ghost text-xs rounded-lg px-2 py-1.5 disabled:opacity-40 inline-flex items-center gap-1"><Upload size={13} />上传文件</button>
-          <button onClick={uploadFolder} disabled={dir && dir.offline} className="btn-ghost text-xs rounded-lg px-2 py-1.5 disabled:opacity-40 inline-flex items-center gap-1"><FolderOpen size={13} />上传文件夹</button>
+          <button onClick={uploadFiles} disabled={dir && dir.offline} title="单文件上限 5GB" className="btn-ghost text-xs rounded-lg px-2 py-1.5 disabled:opacity-40 inline-flex items-center gap-1"><Upload size={13} />上传文件</button>
+          <button onClick={uploadFolder} disabled={dir && dir.offline} title="单文件上限 5GB，超出的文件会被跳过" className="btn-ghost text-xs rounded-lg px-2 py-1.5 disabled:opacity-40 inline-flex items-center gap-1"><FolderOpen size={13} />上传文件夹</button>
           <div className="flex-1" />
           <select value={sortKey} onChange={(e) => setSortKey(e.target.value)} className="field text-xs rounded-lg px-1.5 py-1.5" title="排序">
             <option value="name">名称</option><option value="type">类型</option><option value="size">大小</option><option value="time">修改时间</option>
           </select>
-          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="搜索" className="field text-xs rounded-lg px-2 py-1.5 w-24" />
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="搜索当前群文件" className="field text-xs rounded-lg px-2 py-1.5 w-32" />
+        </div>
+        <div className="flex items-center gap-1.5 mb-2 flex-wrap">
+          <span className="text-xs txt-dim shrink-0 ml-1">已选 {selectedEntries().length} 项</span>
+          <button onClick={() => { const all = {}; sorted.forEach((e) => { all[e.entryId] = true }); setSelected(all) }} disabled={showingSpaceSearch || !sorted.length} className="btn-ghost text-xs rounded-lg px-2 py-1.5 disabled:opacity-40">全选</button>
+          <button onClick={clearSelection} disabled={!selectedEntries().length} className="btn-ghost text-xs rounded-lg px-2 py-1.5 disabled:opacity-40">清空</button>
+          <button onClick={downloadSelected} disabled={showingSpaceSearch || !selectedEntries().length || (dir && dir.offline)} className="btn-primary text-xs rounded-lg px-3 py-1.5 disabled:opacity-40 inline-flex items-center gap-1"><Download size={13} />下载</button>
+          <button onClick={deleteSelected} disabled={showingSpaceSearch || !selectedEntries().length || (dir && dir.offline)} className="btn-ghost text-xs rounded-lg px-3 py-1.5 disabled:opacity-40 inline-flex items-center gap-1 text-red-500"><Trash2 size={13} />删除</button>
+          <button onClick={() => rename(selectedFolders()[0])} disabled={showingSpaceSearch || selectedEntries().length !== 1 || selectedFolders().length !== 1 || (dir && dir.offline)} className="btn-ghost text-xs rounded-lg px-2 py-1.5 disabled:opacity-40 inline-flex items-center gap-1"><Pencil size={13} />重命名</button>
         </div>
 
         {msg && <div className="mb-1.5 text-[11px] accent-txt truncate" title={msg}>{msg}</div>}
+        {uploadBatch && <div className="mb-1.5 text-[11px] txt-dim">总文件数 {uploadBatch.total} · 已上传 {uploadBatch.done}{uploadBatch.failed ? ' · 失败/跳过 ' + uploadBatch.failed : ''}</div>}
+        {progress && (
+          <div className="mb-2">
+            <div className="flex justify-between text-[10px] txt-dim mb-0.5"><span>{progress.dir === 'out' ? '上传中' : '下载中'}</span><span>{progress.pct}%</span></div>
+            <div className="h-1.5 rounded-full bg-black/10 overflow-hidden"><div className="h-full rounded-full transition-all" style={{ width: progress.pct + '%', background: 'var(--accent)' }} /></div>
+          </div>
+        )}
 
         <div className="flex-1 min-h-0 overflow-auto rounded-xl bd-soft border divide-y">
           {loading ? <div className="text-xs txt-dim py-10 text-center">加载中…</div>
-            : dir && dir.offline && !dir.entries.length ? <div className="text-xs txt-dim py-10 text-center"><WifiOff size={22} className="mx-auto mb-2 opacity-60" />共享主机离线，暂时不可访问</div>
+            : showingSpaceSearch ? (
+              spaceSearching ? <div className="text-xs txt-dim py-10 text-center">搜索中…</div>
+                : !spaceResults.length ? <div className="text-xs txt-dim py-10 text-center">没有匹配的文件或文件夹</div>
+                  : spaceResults.map((r) => (
+                    <button key={(r.spaceId || '') + ':' + r.entryId} onClick={() => openSearchResult(r)} className="w-full flex items-center gap-2.5 px-3 py-2 text-xs hover:bg-[var(--hover)] text-left">
+                      {r.type === 'folder' ? <Folder size={18} className="accent-txt shrink-0" /> : <FileIcon size={18} className="txt-dim shrink-0" />}
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate font-medium">{r.name}</div>
+                        <div className="text-[11px] txt-dim truncate" title={searchResultPath(r)}>{searchResultPath(r)}{r.cached ? ' · 缓存' : ''}</div>
+                      </div>
+                      <span className="txt-dim shrink-0 w-16 text-right">{r.type === 'file' ? fmtSize(r.size) : '文件夹'}</span>
+                    </button>
+                  ))
+            ) : dir && dir.offline && !dir.entries.length ? <div className="text-xs txt-dim py-10 text-center"><WifiOff size={22} className="mx-auto mb-2 opacity-60" />共享主机离线，暂时不可访问</div>
               : !sorted.length ? <div className="text-xs txt-dim py-10 text-center">空目录</div>
                 : sorted.map((e) => (
-                  <div key={e.entryId} className="flex items-center gap-2.5 px-3 py-2 text-xs hover:bg-black/5"
-                    title={e.type === 'file' ? ('大小: ' + fmtSize(e.size) + '\n版本: ' + (e.currentVersion === 0 ? '原始' : 'V' + String(e.currentVersion).padStart(2, '0')) + '（共 ' + e.versionCount + ' 版）\n更新者: ' + nameOf(e.updatedBy) + '\n更新: ' + fmtShareTime(e.updatedAt) + '\nSHA-256: ' + (e.hash || '').slice(0, 24) + '…') : ('创建者: ' + nameOf(e.createdBy) + '\n创建: ' + fmtShareTime(e.createdAt))}>
+                  <div key={e.entryId} className={'flex items-center gap-2.5 px-3 py-2 text-xs hover:bg-[var(--hover)]' + (selected[e.entryId] ? ' bg-[var(--accent-tint)]' : '')}
+                    title={e.type === 'file' ? ('大小: ' + fmtSize(e.size) + '\n更新者: ' + nameOf(e.updatedBy) + '\n更新: ' + fmtShareTime(e.updatedAt)) : ('创建者: ' + nameOf(e.createdBy) + '\n创建: ' + fmtShareTime(e.createdAt))}>
+                    <input type="checkbox" checked={!!selected[e.entryId]} onChange={() => toggleSelect(e.entryId)} className="shrink-0 accent-[var(--accent)]" />
                     {e.type === 'folder'
                       ? <button onClick={() => loadDir(space, e.entryId)} className="flex items-center gap-2.5 flex-1 min-w-0 text-left"><Folder size={18} className="accent-txt shrink-0" /><span className="truncate font-medium">{e.name}</span></button>
-                      : <div className="flex items-center gap-2.5 flex-1 min-w-0"><FileIcon size={18} className="txt-dim shrink-0" /><span className="truncate">{e.name}</span>{e.currentVersion > 0 && <span className="text-[10px] px-1 rounded bg-blue-500/15 text-blue-600 shrink-0">V{String(e.currentVersion).padStart(2, '0')}</span>}</div>}
+                      : <div onClick={() => toggleSelect(e.entryId)} className="flex items-center gap-2.5 flex-1 min-w-0 cursor-pointer"><FileIcon size={18} className="txt-dim shrink-0" /><span className="truncate">{e.name}</span></div>}
+                    <button onClick={(ev) => { ev.stopPropagation(); forwardEntry(e) }} className="icon-btn shrink-0" title="转发到本群"><Forward size={14} /></button>
                     <span className="txt-dim shrink-0 w-16 text-right">{e.type === 'file' ? fmtSize(e.size) : ''}</span>
                     <span className="txt-dim shrink-0 w-24 text-right hidden sm:block">{fmtShareTime(e.updatedAt)}</span>
-                    <button onClick={(ev) => { ev.stopPropagation(); setMenu(menu && menu.id === e.entryId ? null : { id: e.entryId, entry: e }) }} className="icon-btn shrink-0 relative"><MoreVertical size={14} />
-                      {menu && menu.id === e.entryId && (
-                        <div className="absolute right-0 top-7 z-40 w-32 glass-panel rounded-lg py-1 text-left text-xs shadow-lg" onClick={(ev) => ev.stopPropagation()}>
-                          {e.type === 'file' && <button onClick={() => { setMenu(null); download(e, null) }} className="w-full px-3 py-1.5 hover:bg-black/5 flex items-center gap-2"><Download size={13} />下载</button>}
-                          {e.type === 'file' && !(dir && dir.offline) && <button onClick={() => { setMenu(null); uploadVersion(e) }} className="w-full px-3 py-1.5 hover:bg-black/5 flex items-center gap-2"><Upload size={13} />上传新版本</button>}
-                          {e.type === 'file' && <button onClick={() => { setMenu(null); setHistory(e) }} className="w-full px-3 py-1.5 hover:bg-black/5 flex items-center gap-2"><History size={13} />历史版本</button>}
-                          {!(dir && dir.offline) && <button onClick={() => { setMenu(null); rename(e) }} className="w-full px-3 py-1.5 hover:bg-black/5 flex items-center gap-2"><Pencil size={13} />重命名</button>}
-                          {!(dir && dir.offline) && <button onClick={() => { setMenu(null); remove(e) }} className="w-full px-3 py-1.5 hover:bg-black/5 flex items-center gap-2 text-red-500"><Trash2 size={13} />删除</button>}
-                        </div>
-                      )}
-                    </button>
                   </div>
                 ))}
         </div>
       </div>
-      {history && <ShareHistoryDialog space={space} entry={history} onClose={() => setHistory(null)} onDownload={download} />}
       {inputDlg && <ShareInputDialog title={inputDlg.title} placeholder={inputDlg.placeholder} initial={inputDlg.value} onOk={inputDlg.onOk} onClose={() => setInputDlg(null)} />}
       {conflict && (
         <Overlay onClose={() => { setConflict(null); queueRef.current.shift(); processQueue() }}>
-          <div className="w-80 glass-panel rounded-2xl p-5">
+          <div className="floating-dialog floating-dialog-sm floating-surface glass-panel floating-dialog-pad" role="dialog" aria-modal="true" aria-label="同名文件已存在">
             <div className="text-sm font-semibold txt">同名文件已存在</div>
-            <div className="mt-2 text-xs txt-dim leading-relaxed">「{conflict.name}」已存在。请选择处理方式（不会覆盖原文件）：</div>
+            <div className="mt-2 floating-subtle floating-long-text">「{conflict.name}」已存在。请选择处理方式（不会覆盖原文件）：</div>
             <div className="mt-4 flex flex-col gap-2">
-              <button onClick={() => resolveConflict('version')} className="btn-primary text-xs rounded-lg px-3 py-2">作为新版本上传（生成 _VXX）</button>
-              <button onClick={() => resolveConflict('rename')} className="btn-ghost text-xs rounded-lg px-3 py-2">改名为新文件</button>
+              <button onClick={resolveConflictRename} className="btn-primary text-xs rounded-lg px-3 py-2">改名为新文件</button>
               <button onClick={() => { setConflict(null); queueRef.current.shift(); processQueue() }} className="btn-ghost text-xs rounded-lg px-3 py-2">跳过此文件</button>
             </div>
           </div>
@@ -1798,6 +2066,8 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
   const [sideMenu, setSideMenu] = useState(null) // { x, y, item } 好友列表右键菜单
   const [emojiOpen, setEmojiOpen] = useState(false)
   const [emojiTab, setEmojiTab] = useState('emoji') // emoji | sticker，与 emoji 同层级的表情包标签
+  const [emojiVisibleCount, setEmojiVisibleCount] = useState(EMOJI_BATCH)
+  const [stickerVisibleCount, setStickerVisibleCount] = useState(STICKER_BATCH)
   const [stickers, setStickers] = useState([])
   const stickersLoadedRef = useRef(false)
   const [fontOpen, setFontOpen] = useState(false)
@@ -1860,16 +2130,26 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
     document.addEventListener('mousedown', onDown)
     return () => document.removeEventListener('mousedown', onDown)
   }, [emojiOpen])
+  useEffect(() => {
+    if (!emojiOpen) return
+    if (emojiTab === 'emoji') setEmojiVisibleCount(EMOJI_BATCH)
+    else { setStickerVisibleCount(STICKER_BATCH); loadStickers() }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [emojiOpen, emojiTab])
   const [drafts, setDrafts] = useState({})
   const [shake, setShake] = useState(false)
   const [chatNotice, setChatNotice] = useState(null)
   const [confirmAction, setConfirmAction] = useState(null)
   const [groups, setGroups] = useState([])
+  const [pinnedByGroup, setPinnedByGroup] = useState({})
+  const [pinnedListOpen, setPinnedListOpen] = useState(false)
+  const [snapshotView, setSnapshotView] = useState(null)
   const [showCreateGroup, setShowCreateGroup] = useState(false)
   const [groupName, setGroupName] = useState('')
   const [groupMembers, setGroupMembers] = useState({})
   const [groupManage, setGroupManage] = useState(null)
-  const [sharePanel, setSharePanel] = useState(false) // 群共享空间面板
+  const [sharePanel, setSharePanel] = useState(false) // 群文件面板
+  const [sharePanelTarget, setSharePanelTarget] = useState(null)
   const [sideTab, setSideTab] = useState('all')
   const [sideQuery, setSideQuery] = useState('') // 会话列表搜索，仅前端过滤展示
   const [atBottom, setAtBottom] = useState(true)
@@ -1881,11 +2161,13 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
   const scrollRef = useRef(null)
   const composerRef = useRef(null)
   const activeRef = useRef(active); activeRef.current = active
+  const selfRef = useRef(null); selfRef.current = self
   const settingsRef = useRef(settings); settingsRef.current = settings
   const mutedRef = useRef([]); mutedRef.current = settings.muted || []
   const nameByIdRef = useRef({}); nameByIdRef.current = nameById
   const peersRef = useRef([]); peersRef.current = peers
   const convosRef = useRef({}); convosRef.current = convos
+  const pinnedByGroupRef = useRef({}); pinnedByGroupRef.current = pinnedByGroup
   const statusBufRef = useRef({}) // mid -> status，消息尚未渲染时暂存其发送状态，pushMsg 时回填
   const lastActivityRef = useRef(Date.now())
   const lastTypingRef = useRef(0)
@@ -1908,6 +2190,7 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
       setReads(r || {}) // 未读数由 convos + reads 派生（见 unread useMemo）
     })
     if (api.store.getGroups) api.store.getGroups().then((list) => setGroups(list || []))
+    if (api.store.getPinnedMessages) api.store.getPinnedMessages().then((list) => setPinnedByGroup(list || {}))
     api.settings.get().then((s) => { if (s) { setSettings(s); setBurnOn(!!s.burnDefault); setBurnTtl(s.burnTtl || 10); setDisplay({ theme: s.theme, fontPx: s.fontPx, uiStyle: s.uiStyle, chatFont: s.chatFont, chatFontPx: s.chatFontPx }) } })
     if (api.store.getDrafts) api.store.getDrafts().then((d) => { const saved = d || {}; setDrafts(saved); if (saved[activeRef.current]) setText(saved[activeRef.current]) })
     const unsubs = [
@@ -1943,26 +2226,35 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
       api.file.onFailed(({ mid, canceled, queued }) => { setFileProgress((prev) => { const n = { ...prev }; delete n[mid]; return n }); setFileStatusByMid(mid, queued ? 'queued' : 'failed'); if (!canceled && !queued) showChatNotice('文件传输失败（对方不可达或已拒绝）') }),
       api.file.onRejected ? api.file.onRejected(({ files, limitMB }) => showChatNotice((files && files.length ? '「' + files.join('、') + '」' : '文件') + ' 超过 ' + limitMB + 'MB 上限，未发送')) : () => {},
       api.msg.onRecall(({ conv, mid }) => {
-        // 对方撤回：除原位提示外，非当前会话或失焦时弹通知告知
-        const target = (convosRef.current[conv] || []).find((x) => x.mid === mid)
-        if (target && !target.recalled && !(mutedRef.current || []).includes(conv)) {
-          const who = target.name || nameByIdRef.current[target.from] || '对方'
-          if (conv !== activeRef.current || !document.hasFocus()) addToast({ title: who, text: '撤回了一条消息', conv })
-        }
+        // 撤回只在原消息位置展示文字，不额外弹通知。
         setConvos((prev) => ({ ...prev, [conv]: (prev[conv] || []).map((x) => x.mid === mid ? { ...x, recalled: true, text: '' } : x) }))
       }),
       api.msg.onReaction(({ conv, mid, emoji, from }) => applyReaction(conv, mid, emoji, from)),
+      api.msg.onPinnedList ? api.msg.onPinnedList((list) => setPinnedByGroup(list || {})) : () => {},
+      api.msg.onPinned ? api.msg.onPinned(() => {}) : () => {},
+      api.msg.onUnpinned ? api.msg.onUnpinned(() => {}) : () => {},
       api.msg.onStatus ? api.msg.onStatus(({ mid, toId, status }) => updateMsgStatus(toId, mid, status)) : () => {},
       api.msg.onNudge(({ from, text }) => {
         if ((mutedRef.current || []).includes(from)) return
         setShake(true); setTimeout(() => setShake(false), 500)
-        const who = nameByIdRef.current[from] || '有人'
+        const who = displayNameForId(from, '有人')
         const body = (text && text.trim()) ? text : '戳了你一下 👋'
         pushMsg(from, { mid: 'nudge-' + Date.now() + '-' + String(from).slice(0, 4), system: true, text: who + ' ' + body, ts: Date.now() })
         addToast({ title: who, text: body, conv: from })
       }),
     ]
-    if (api.store.onGroups) unsubs.push(api.store.onGroups((list) => setGroups(list || [])))
+    if (api.store.onGroups) unsubs.push(api.store.onGroups((list) => {
+      const next = list || []
+      setGroups(next)
+      const activeId = activeRef.current
+      if (activeId && activeId.startsWith('room:') && !next.some((g) => g.id === activeId)) {
+        setActive('')
+        setSharePanel(false)
+        setSharePanelTarget(null)
+        setConvos((prev) => { const n = { ...prev }; delete n[activeId]; return n })
+      }
+      setGroupManage((cur) => (cur && !next.some((g) => g.id === cur.id) ? null : cur))
+    }))
     if (api.shot && api.shot.onResult) unsubs.push(api.shot.onResult((info) => {
       if (!info || !info.path) return
       setPendingAtts((prev) => [...prev, { path: info.path, name: info.name || '截图.png', size: info.size || 0, preview: info.dataUrl || '' }])
@@ -1996,7 +2288,7 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
   useEffect(() => {
     const onKey = (e) => {
       if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F')) { e.preventDefault(); setSearchPane('global') }
-      else if (e.key === 'Escape') { setSearchPane(false); setShowSettings(false); setShowProfile(false); setProfilePeer(null); setEmojiOpen(false); setFontOpen(false); setShotOpen(false); setHistoryOpen(false); setPresenceOpen(false); setCtxMenu(null); setSideMenu(null); setReplyTo(null); setSelectMode(false); setSelected({}) }
+      else if (e.key === 'Escape') { setSearchPane(false); setShowSettings(false); setShowProfile(false); setProfilePeer(null); setEmojiOpen(false); setFontOpen(false); setShotOpen(false); setHistoryOpen(false); setPinnedListOpen(false); setSnapshotView(null); setPresenceOpen(false); setCtxMenu(null); setSideMenu(null); setReplyTo(null); setSelectMode(false); setSelected({}) }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -2043,7 +2335,8 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
     if (key === lastBottomKeyRef.current) return
     const convChanged = !lastBottomKeyRef.current.startsWith(active + ':')
     lastBottomKeyRef.current = key
-    if (convChanged || atBottomRef.current || (last && last.self)) {
+    const pinSystem = last && last.self && (last.system === 'message_pinned' || last.system === 'message_unpinned')
+    if (convChanged || atBottomRef.current || (last && last.self && !pinSystem)) {
       if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
       setNewBelow(0)
     } else if (last && !last.system) setNewBelow((n) => n + 1)
@@ -2117,6 +2410,11 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
     if (document.hasFocus()) scheduleToastExpiry(id)
     else pendingToastsRef.current.push(id)
   }
+  function messageMentionsMe (m) {
+    if (!m || m.scope !== 'room' || !m.text) return false
+    const me = selfRef.current
+    return textMentionsNames(m.text, [me && me.name, '所有人', '全体成员', 'all', 'everyone'])
+  }
   useEffect(() => {
     const flush = () => {
       const ids = pendingToastsRef.current
@@ -2138,7 +2436,18 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
     pushMsg(convId, m)
     if (m.self) return // 自己操作产生的系统消息进入会话，但不计未读、不弹通知
     if (m.system === 'avatar-changed') return // 群头像更新只保留聊天框内文字，不计未读、不弹通知
-    if (typeof m.system === 'string' && m.system.indexOf('share-') === 0) return // 共享空间广播只在聊天框展示，不计未读、不弹通知
+    if (m.system === 'message_unpinned') return // 取消置顶只保留聊天框内文字，不计未读、不弹通知
+    if (typeof m.system === 'string' && m.system.indexOf('share-') === 0) return // 群文件广播只在聊天框展示，不计未读、不弹通知
+    const mutedMention = (mutedRef.current || []).includes(convId) && messageMentionsMe(m)
+    if (mutedMention) {
+      if (document.hasFocus()) {
+        const title = (m.room && m.room.name) || '群聊'
+        addToast({ title, text: ((displayNameForId(m.from, m.name || '有人')) + ': ' + (m.text || '')).slice(0, 120), conv: convId })
+      }
+      if (convId !== activeRef.current || !document.hasFocus()) {
+        if (api.ui && api.ui.attention) api.ui.attention({ flash: true, trayFlash: true })
+      }
+    }
     if (convId === activeRef.current) bumpRead(convId, m.ts || Date.now()) // 活动会话即时已读；非活动会话未读由派生自动计数
     // 这里仅处理会话状态，系统通知由主进程负责
   }
@@ -2203,6 +2512,19 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
   }
   function roomById (id) { return (groups || []).find((g) => g.id === id) || null }
   function peerById (id) { return (peers || []).find((p) => p.id === id) || null }
+  function displayNameForPeer (p, fallback) { return (p && (p.remark || p.name)) || fallback || '' }
+  function displayNameForId (id, fallback) {
+    if (!id) return fallback || ''
+    if (selfRef.current && id === selfRef.current.id) return '我'
+    const p = peerById(id)
+    return displayNameForPeer(p, (nameByIdRef.current && nameByIdRef.current[id]) || fallback || String(id).slice(0, 6))
+  }
+  function publicNameForId (id, fallback) {
+    if (!id) return fallback || ''
+    if (selfRef.current && id === selfRef.current.id) return selfRef.current.name || fallback || '我'
+    const p = peerById(id)
+    return (p && p.name) || fallback || String(id).slice(0, 6)
+  }
   function hasOnlineRoomRecipient (room) {
     if (!room || !Array.isArray(room.members)) return false
     const online = new Set((peers || []).filter((p) => p.online).map((p) => p.id))
@@ -2235,7 +2557,7 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
     const batchId = ((t ? 1 : 0) + atts.length) > 1 ? ('b-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7)) : null
     if (t) {
       const opts = { burn: burnOn, ttl: burnTtl, batch: batchId }
-      if (replyTo) opts.reply = { name: replyTo.name, text: (replyTo.text || '').slice(0, 80) }
+      if (replyTo) opts.reply = { name: replyTo.publicName || replyTo.name, text: (replyTo.publicText || replyTo.text || '').slice(0, 80) }
       const res = await sendTextToConv(conv, t, opts)
       if (res && res.ok) {
         setText(''); setEmojiOpen(false); setReplyTo(null)
@@ -2285,6 +2607,40 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
     if (t.error) { showChatNotice(t.error); return }
     api.file.send(t.scope, t.toId, paths, batch || null, opts || null).then((out) => { (out || []).forEach((msg) => pushMsg(activeRef.current, msg)) })
   }
+  function openSharedEntry (share) {
+    if (!share || share.type !== 'share-entry' || !share.spaceId) return
+    const groupId = share.groupId || activeRef.current
+    if (!roomById(groupId)) { showChatNotice('群聊不存在，无法打开群空间'); return }
+    if (activeRef.current !== groupId) selectConv(groupId)
+    setSharePanelTarget({ ...share, nonce: Date.now() })
+    setSharePanel(true)
+  }
+  async function forwardShareEntry (sp, entry, pid, breadcrumb) {
+    const room = roomById(activeRef.current)
+    if (!room || !sp || !entry) return { ok: false, error: '请选择群聊' }
+    const isFolder = entry.type === 'folder'
+    const text = '分享了群文件' + (isFolder ? '夹' : '') + '：' + (entry.name || '')
+    const res = await sendTextToConv(room.id, text, {
+      share: {
+        type: 'share-entry',
+        groupId: room.id,
+        spaceId: sp.spaceId,
+        spaceName: sp.name,
+        entryId: entry.entryId,
+        parentId: pid || 'root',
+        entryType: entry.type,
+        name: entry.name,
+        size: entry.size || 0,
+        updatedAt: entry.updatedAt || 0,
+        breadcrumb: (breadcrumb || []).map((c) => ({ entryId: c.entryId, name: c.name })).slice(-6),
+      },
+    })
+    if (res && res.ok) {
+      pushMsg(room.id, res.msg)
+      return { ok: true }
+    }
+    return { ok: false, error: (res && res.error) || '转发失败' }
+  }
   async function attachFiles () {
     if (!api.file.choose) { showChatNotice('当前环境不支持选择文件'); return }
     const list = await api.file.choose()
@@ -2312,6 +2668,12 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
   function sendSticker (s) {
     sendFiles([s.path], null, { sticker: true }) // 标记为表情包：气泡内不展示文件操作
     setEmojiOpen(false)
+  }
+  function onEmojiPickerScroll (e) {
+    const el = e.currentTarget
+    if (!el || el.scrollTop + el.clientHeight < el.scrollHeight - 32) return
+    if (emojiTab === 'emoji') setEmojiVisibleCount((n) => Math.min(EMOJIS.length, n + EMOJI_BATCH))
+    else setStickerVisibleCount((n) => Math.min(stickers.length, n + STICKER_BATCH))
   }
   async function takeShot (mode) {
     setShotOpen(false)
@@ -2408,7 +2770,15 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
       }),
     }))
   }
-  function doReply (m) { setReplyTo({ name: m.self ? '我' : (m.name || '对方'), text: m.recalled ? '[已撤回]' : (m.text || (m.type === 'file' ? ('[文件] ' + (m.fname || '')) : '')) }) }
+  function doReply (m) {
+    const rawText = m.text || ''
+    setReplyTo({
+      name: m.self ? '我' : displayNameForId(m.from, m.name || '对方'),
+      publicName: m.self ? (self ? self.name : '我') : publicNameForId(m.from, m.name || '对方'),
+      text: m.recalled ? '[已撤回]' : (localizeMentionsText(rawText, mentionNameMap) || (m.type === 'file' ? ('[文件] ' + (m.fname || '')) : '')),
+      publicText: m.recalled ? '[已撤回]' : (rawText || (m.type === 'file' ? ('[文件] ' + (m.fname || '')) : '')),
+    })
+  }
   // 撤回：先本地标记，再通知对方
   function markRecalledLocal (mid) {
     setConvos((prev) => ({ ...prev, [activeRef.current]: (prev[activeRef.current] || []).map((x) => x.mid === mid ? { ...x, recalled: true, recalledText: x.self ? (x.text || '') : '', text: '' } : x) }))
@@ -2438,16 +2808,18 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
   function toggleSelect (mid) { setSelected((prev) => { const n = { ...prev }; if (n[mid]) delete n[mid]; else n[mid] = true; return n }) }
   function doForward (targetConv) {
     const srcConv = activeRef.current
-    const msgs = (convos[srcConv] || []).filter((x) => selected[x.mid] && x.text && !x.recalled)
+    const msgs = (convos[srcConv] || []).filter((x) => selected[x.mid] && x.text && !x.recalled && !isShareEntryMessage(x))
     if (!msgs.length) { setSelectMode(false); setSelected({}); setForwardOpen(false); return }
     ;(async () => {
       if (forwardMode === 'merge' && msgs.length > 1) {
         const lines = msgs.map((x) => (x.self ? (self ? self.name : '我') : (x.name || '对方')) + ': ' + x.text)
-        const res = await sendTextToConv(targetConv, lines.join('\n'), { fwd: { name: convTitle(srcConv) + ' 的聊天记录', count: msgs.length } })
+        const srcRoom = roomById(srcConv)
+        const publicTitle = srcRoom ? (srcRoom.name || '群聊') : publicNameForId(srcConv, '私聊')
+        const res = await sendTextToConv(targetConv, lines.join('\n'), { fwd: { name: publicTitle + ' 的聊天记录', count: msgs.length } })
         if (res && res.ok) pushMsg(targetConv, res.msg)
       } else {
         for (const x of msgs) {
-          const res = await sendTextToConv(targetConv, x.text, { fwd: { name: x.self ? (self ? self.name : '我') : (x.name || '对方') } })
+          const res = await sendTextToConv(targetConv, x.text, { fwd: { name: x.self ? (self ? self.name : '我') : publicNameForId(x.from, x.name || '对方') } })
           if (res && res.ok) pushMsg(targetConv, res.msg)
         }
       }
@@ -2514,7 +2886,136 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
       flashTimerRef.current = setTimeout(() => setFlashMid(null), 1800)
     }, 120)
   }
-  function insertMention (name) { setText((t) => t.replace(/@(\S*)$/, '@' + name + ' ')) }
+  function sortPinnedList (list) {
+    return (list || []).slice().sort((a, b) => (b.pinnedAt || 0) - (a.pinnedAt || 0) || String(b.pinId).localeCompare(String(a.pinId)))
+  }
+  function pinnedRecordForMessage (groupId, mid) {
+    return ((pinnedByGroupRef.current || {})[groupId] || []).find((p) => p && p.messageId === mid && p.status !== 'unpinned' && p.status !== 'deleted') || null
+  }
+  function localMessageForPin (pin) {
+    if (!pin || !pin.groupId || !pin.messageId) return null
+    return (convosRef.current[pin.groupId] || []).find((x) => x && x.mid === pin.messageId) || null
+  }
+  function pinnedSnapshotOf (pin) {
+    return (pin && pin.messageSnapshot) || {}
+  }
+  function pinnedOpenPath (pin) {
+    const m = localMessageForPin(pin)
+    const snap = pinnedSnapshotOf(pin)
+    return (m && m.path) || snap.localPath || ''
+  }
+  function pinnedTopPreview (pin) {
+    const snap = pinnedSnapshotOf(pin)
+    const type = snap.messageType || (pin && pin.messageType)
+    if (type === 'file') return snap.fileName || String((pin && pin.contentPreview) || '').replace(/^\[文件\]\s*/, '') || '文件'
+    return localizeMentionsText((pin && pin.contentPreview) || snap.contentPreview || '[消息]', mentionNameMap)
+  }
+  function openPinnedAttachment (pin) {
+    const p = pinnedOpenPath(pin)
+    if (!p) { showChatNotice('本地没有可打开的文件'); return }
+    api.file.open(p)
+  }
+  async function pinChatMessage (m) {
+    const groupId = activeRef.current
+    if (!roomById(groupId)) { showChatNotice('仅群聊支持置顶消息'); return }
+    if (!m || !m.mid) { showChatNotice('消息不存在'); return }
+    if (m.recalled) { showChatNotice('该消息已撤回，不能置顶'); return }
+    if (m.burn) { showChatNotice('阅后即焚消息不能置顶'); return }
+    if (pinnedRecordForMessage(groupId, m.mid)) { showChatNotice('该消息已置顶'); return }
+    if (!api.msg.pin) { showChatNotice('当前版本不支持置顶消息，请重启应用'); return }
+    const res = await api.msg.pin(groupId, m)
+    if (!res || !res.ok) { showChatNotice((res && res.error) || '置顶失败'); return }
+    setPinnedByGroup((prev) => ({
+      ...prev,
+      [groupId]: sortPinnedList([res.pin, ...((prev[groupId] || []).filter((p) => p.pinId !== res.pin.pinId && p.messageId !== res.pin.messageId))]),
+    }))
+  }
+  function viewPinnedOriginal (pin) {
+    if (!pin || !pin.groupId || !pin.messageId) return
+    const list = convosRef.current[pin.groupId] || []
+    const m = list.find((x) => x && x.mid === pin.messageId)
+    if (m && !m.recalled) {
+      setPinnedListOpen(false)
+      locateMessage(pin.groupId, pin.messageId)
+      return
+    }
+    setSnapshotView({
+      pin,
+      text: m && m.recalled ? '原消息已撤回，以下为置顶时保存的内容快照。' : '原消息已不存在，以下为置顶时保存的内容快照。',
+    })
+  }
+  function PinnedAttachmentPreview ({ pin, compact }) {
+    const snap = pinnedSnapshotOf(pin)
+    const type = snap.messageType || pin.messageType
+    const path = pinnedOpenPath(pin)
+    if (type === 'image') {
+      const src = (localMessageForPin(pin) || {}).dataUrl || snap.thumbnailDataUrl
+      if (!src) return <span className="pinned-file-chip"><ImageIcon size={14} /> 图片</span>
+      if (compact) return <span className="pinned-thumb pinned-thumb-compact"><StaticImg src={src} alt={snap.fileName || '置顶图片'} /></span>
+      return (
+        <button onClick={() => path ? openPinnedAttachment(pin) : viewPinnedOriginal(pin)} className="pinned-thumb" title={path ? '打开图片' : '查看置顶快照'}>
+          <StaticImg src={src} alt={snap.fileName || '置顶图片'} />
+        </button>
+      )
+    }
+    if (type === 'file') {
+      if (compact) {
+        return null
+      }
+      return (
+        <button onClick={() => path ? openPinnedAttachment(pin) : viewPinnedOriginal(pin)} className="pinned-file-card" title={path ? '打开文件' : '查看置顶快照'}>
+          <FileIcon size={18} className="accent-txt shrink-0" />
+          <span className="min-w-0 text-left">
+            <span className="block truncate">{snap.fileName || pin.contentPreview || '文件'}</span>
+            {snap.fileSize ? <span className="block text-[10px] txt-dim">{fmtSize(snap.fileSize)}</span> : null}
+          </span>
+        </button>
+      )
+    }
+    return null
+  }
+  function PinnedMetaPopover ({ pin }) {
+    const snap = pinnedSnapshotOf(pin)
+    const nameWithRemark = (id, fallback) => {
+      if (id && self && id === self.id) return '我'
+      const p = id ? (peersRef.current || []).find((x) => x.id === id) : null
+      return (p && (p.remark || p.name)) || (id && nameByIdRef.current[id]) || fallback || '未知'
+    }
+    const senderName = nameWithRemark(snap.senderId || pin.senderId, snap.senderName || pin.senderName)
+    const pinnedName = nameWithRemark(pin.pinnedBy, pin.pinnedByName)
+    return (
+      <span className="pinned-meta-wrap" tabIndex={0} title="查看置顶信息">
+        <Info size={14} className="txt-dim" />
+        <span className="pinned-meta-pop">
+          <span>发送人：{senderName}</span>
+          <span>原消息：{snap.sentAt ? `${dayLabel(snap.sentAt)} ${fmtTime(snap.sentAt)}` : '-'}</span>
+          <span>置顶人：{pinnedName}</span>
+          <span>置顶时间：{pin.pinnedAt ? `${dayLabel(pin.pinnedAt)} ${fmtTime(pin.pinnedAt)}` : '-'}</span>
+        </span>
+      </span>
+    )
+  }
+  function confirmUnpinPinnedMessage (pin) {
+    if (!pin || !api.msg.unpin) return
+    setConfirmAction({
+      title: '取消置顶',
+      text: '取消后，群成员将不再在顶部看到该置顶消息。',
+      confirmText: '取消置顶',
+      run: async () => {
+        const res = await api.msg.unpin(pin.groupId, pin.pinId)
+        if (!res || !res.ok) { showChatNotice((res && res.error) || '取消置顶失败'); return }
+        setPinnedByGroup((prev) => ({
+          ...prev,
+          [pin.groupId]: (prev[pin.groupId] || []).filter((p) => p.pinId !== pin.pinId),
+        }))
+      },
+    })
+  }
+  function insertMention (person) {
+    const name = typeof person === 'string' ? person : ((person && (person.publicName || person.name)) || '')
+    if (!name) return
+    setText((t) => t.replace(/@(\S*)$/, '@' + name + ' '))
+  }
   function togglePin (id) { const cur = settings.pinned || []; patchSettings({ pinned: cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id] }) }
   function toggleMute (id) { const cur = settings.muted || []; patchSettings({ muted: cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id] }) }
   function openCreateGroup () {
@@ -2572,6 +3073,26 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
         setConvos((prev) => { const n = { ...prev }; delete n[group.id]; return n })
         if (activeRef.current === group.id) setActive('')
         if (groupManage && groupManage.id === group.id) setGroupManage(null)
+      },
+    })
+  }
+
+  function dismissGroup (group) {
+    if (!group || !api.store.dismissGroup) return
+    setConfirmAction({
+      title: '解散群聊',
+      text: '解散“' + (group.name || '群聊') + '”后，所有成员都会移除该群，本地群文件入口也会关闭。此操作不可撤销。',
+      confirmText: '解散',
+      run: async () => {
+        const res = await api.store.dismissGroup(group.id)
+        if (!res || !res.ok) { showChatNotice((res && res.error) || '解散群聊失败'); return }
+        setGroups((prev) => prev.filter((g) => g.id !== group.id))
+        setConvos((prev) => { const n = { ...prev }; delete n[group.id]; return n })
+        setDrafts((prev) => { const n = { ...prev }; delete n[group.id]; return n })
+        if (activeRef.current === group.id) setActive('')
+        if (groupManage && groupManage.id === group.id) setGroupManage(null)
+        setSharePanel(false)
+        setSharePanelTarget(null)
       },
     })
   }
@@ -2688,7 +3209,7 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
     nudgeTimesRef.current.push(nowTs)
     api.p2p.nudge(conv)
     const t = (settingsRef.current.nudgeText || '').trim()
-    const peerName = nameByIdRef.current[conv] || (peerById(conv) || {}).name || '\u5bf9\u65b9'
+    const peerName = displayNameForId(conv, '\u5bf9\u65b9')
     pushMsg(conv, { mid: 'nudge-' + nowTs, system: true, text: '\u4f60\u622a\u4e86\u622a ' + peerName + (t ? ':' + t : ''), ts: nowTs })
     addToast({ title: '\u5df2\u53d1\u9001', text: t || '\u622a\u4e86\u5bf9\u65b9\u4e00\u4e0b \ud83d\udc4b', conv })
   }
@@ -2707,8 +3228,14 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
   const presence = PRESENCE.find((p) => p.key === settings.presence) || PRESENCE[0]
   const activeRoom = roomById(active)
   const isRoom = !!activeRoom
+  const activePinnedMessages = activeRoom ? sortPinnedList(pinnedByGroup[activeRoom.id] || []) : []
+  const latestPinnedMessage = activePinnedMessages[0] || null
   const showDetail = isRoom || !!searchPane // 非群聊隐藏聊天详情栏，仅搜索时展示
   const activePeer = isRoom ? null : peers.find((p) => p.id === active)
+  const mentionNameMap = {}
+  for (const p of peers) {
+    if (p && p.name && p.remark) mentionNameMap[p.name] = p.remark
+  }
   const messages = convos[active] || []
   const visibleMessages = messages.length > visibleCount ? messages.slice(-visibleCount) : messages
   const hiddenCount = messages.length - visibleMessages.length
@@ -2751,11 +3278,20 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
     return (p && p.avatar) || m.avatar || null
   }
   const mMatch = text.match(/@(\S*)$/)
+  const mentionQuery = mMatch ? mMatch[1].toLowerCase() : ''
   const roomMembers = activeRoom
-    ? (activeRoom.members || []).map((id) => { if (id === (self && self.id)) return { id, name: self.name, online: true, self: true, presence: settings.presence || 'online', avatar: settings.avatar }; const p = peers.find((x) => x.id === id); return p ? { ...p, name: p.remark || p.name } : { id, name: nameById[id] || id.slice(0, 6), online: false } })
+    ? (activeRoom.members || []).map((id) => { if (id === (self && self.id)) return { id, name: self.name, publicName: self.name, online: true, self: true, presence: settings.presence || 'online', avatar: settings.avatar }; const p = peers.find((x) => x.id === id); return p ? { ...p, name: p.remark || p.name, publicName: p.name } : { id, name: nameById[id] || id.slice(0, 6), publicName: id.slice(0, 6), online: false } })
     : []
   const mentionBase = isRoom ? roomMembers.filter((p) => !p.self) : peers.filter((p) => p.online)
-  const mentionList = (isRoom && mMatch) ? mentionBase.filter((p) => (p.name || '').toLowerCase().includes(mMatch[1].toLowerCase())).slice(0, 6) : []
+  const mentionAllOption = { id: '__mention_all__', name: '所有人', publicName: '所有人', mentionAll: true }
+  const mentionAllAliases = ['所有人', '全体成员', 'all', 'everyone']
+  const mentionAllVisible = isRoom && mMatch && mentionAllAliases.some((name) => name.toLowerCase().includes(mentionQuery))
+  const mentionList = (isRoom && mMatch)
+    ? [
+        ...(mentionAllVisible ? [mentionAllOption] : []),
+        ...mentionBase.filter((p) => ((p.name || '').toLowerCase().includes(mentionQuery) || (p.publicName || '').toLowerCase().includes(mentionQuery))).slice(0, mentionAllVisible ? 5 : 6),
+      ]
+    : []
   // 正在输入：取某会话内仍有效的输入者名称，多人时显示“a、b 等 n 人”
   const typingNamesOf = (convId) => {
     const m = typingPeers[convId] || {}
@@ -2776,7 +3312,7 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
     const pa = isPinned(a.id) ? 0 : 1
     const pb = isPinned(b.id) ? 0 : 1
     if (pa !== pb) return pa - pb
-    return a.name.localeCompare(b.name)
+    return displayNameForPeer(a).localeCompare(displayNameForPeer(b), 'zh-CN')
   })
   const activeDraft = drafts[active]
   const canSendActive = canSendToConv(active)
@@ -2790,7 +3326,7 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
   const convTitle = (id) => {
     const room = roomById(id)
     if (room) return room.name || '群聊'
-    return nameById[id] || (peerById(id) && peerById(id).name) || '私聊'
+    return displayNameForId(id, '私聊')
   }
   const lastMsgOf = (id) => {
     const list = convos[id] || []
@@ -2806,12 +3342,13 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
     if (draft && draft.trim()) return '草稿: ' + draft.trim()
     const m = lastMsgOf(id)
     if (!m) return fallback
-    if (m.recalled) return (m.self ? '你' : (m.name || '对方')) + '撤回了一条消息'
+    if (m.recalled) return (m.self ? '你' : displayNameForId(m.from, m.name || '对方')) + '撤回了一条消息'
     if (m.type === 'file' || m.type === 'file-offer') return (m.self ? '我: ' : '') + '[文件] ' + (m.fname || '')
-    const body = (m.text || '').trim() || (m.system ? '系统消息' : '')
+    if (m.share && m.share.type === 'share-entry') return (m.self ? '我: ' : (roomById(id) && m.from ? displayNameForId(m.from, m.name || '') + ': ' : '')) + '[群文件] ' + (m.share.name || '')
+    const body = localizeMentionsText((m.text || '').trim(), mentionNameMap) || (m.system ? '系统消息' : '')
     if (!body) return fallback
     if (m.self) return '我: ' + body
-    if (roomById(id) && m.name) return m.name + ': ' + body
+    if (roomById(id) && m.from) return displayNameForId(m.from, m.name || '') + ': ' + body
     return body
   }
   const onlineMemberCount = (group) => {
@@ -2820,7 +3357,7 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
   }
   const conversationItems = [
     ...groups.map((g) => ({ id: g.id, kind: 'room', title: g.name || '群聊', group: g, subtitle: `${(g.members || []).length} 位成员 · ${onlineMemberCount(g)} 在线`, last: lastMsgOf(g.id) })),
-    ...peers.map((p) => ({ id: p.id, kind: 'peer', title: p.remark || p.name, peer: p, subtitle: p.online ? (p.status || presenceOf(p).label) : '离线', last: lastMsgOf(p.id) })),
+    ...peers.map((p) => ({ id: p.id, kind: 'peer', title: displayNameForPeer(p), peer: p, subtitle: p.online ? (p.status || presenceOf(p).label) : '离线', last: lastMsgOf(p.id) })),
   ].map((item) => ({
     ...item,
     lastTs: item.last ? (item.last.ts || 0) : 0,
@@ -2876,9 +3413,9 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
                       <ChevronDown size={10} className={'transition ' + (presenceOpen ? 'rotate-180' : '')} />
                     </button>
                     {presenceOpen && (
-                      <div className="absolute left-0 top-full mt-1 z-20 glass-panel rounded-xl p-1 w-32">
+                      <div className="absolute left-0 top-full mt-1 floating-popover" style={{ '--popover-w': '150px' }}>
                         {PRESENCE.map((p) => (
-                          <button key={p.key} onClick={() => { patchSettings({ presence: p.key }); setPresenceOpen(false) }} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs txt hover:bg-white/10 text-left">
+                          <button key={p.key} onClick={() => { patchSettings({ presence: p.key }); setPresenceOpen(false) }} className="floating-menu-item">
                             <span className="w-2 h-2 rounded-full shrink-0" style={{ background: p.color }} />
                             <span className="flex-1">{p.label}</span>
                             {presence.key === p.key && <Check size={12} className="accent-txt shrink-0" />}
@@ -2990,11 +3527,11 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
             ) : activePeer ? (
               <button onClick={() => setProfilePeer(activePeer)} title="查看资料" className="flex items-center gap-3 flex-1 min-w-0 text-left hover:opacity-85 transition">
                 <span className="relative shrink-0">
-                  <Avatar name={activePeer.name} id={activePeer.id} size={36} avatar={activePeer.avatar} dim={!activePeer.online} />
+                  <Avatar name={displayNameForPeer(activePeer)} id={activePeer.id} size={36} avatar={activePeer.avatar} dim={!activePeer.online} />
                   <span className={'absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full ' + (presenceOf(activePeer).key === 'online' ? 'dot-pulse' : '')} style={{ background: presenceOf(activePeer).color, border: '2px solid var(--bar-bg)' }} />
                 </span>
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate font-semibold leading-tight">{nameById[active] || activePeer.name || '\u79c1\u804a'}</span>
+                  <span className="block truncate font-semibold leading-tight">{displayNameForPeer(activePeer, '\u79c1\u804a')}</span>
                   <span className="block text-[11px] leading-tight mt-0.5 truncate">
                     {peerTyping
                       ? <span className="accent-txt inline-flex items-center">正在输入...<span className="typing-dots"><i /><i /><i /></span></span>
@@ -3008,10 +3545,21 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
             ) : (
               <span className="inline-flex items-center gap-2 flex-1 min-w-0 txt-dim"><User size={15} /> <span className="truncate">选择左侧会话开始聊天</span></span>
             )}
-            {activeRoom && <button onClick={() => setSharePanel(true)} title="共享空间" className="icon-btn shrink-0"><HardDrive size={16} /></button>}
+            {activeRoom && <button onClick={() => setSharePanel(true)} title="群文件" className="icon-btn shrink-0"><HardDrive size={16} /></button>}
             {active && <button onClick={() => setHistoryOpen(true)} title="聊天记录" className={'icon-btn shrink-0 ' + (historyOpen ? 'accent-txt' : '')}><History size={16} /></button>}
             {active && <button onClick={() => setSearchPane((v) => (v ? false : 'chat'))} title="搜索聊天" className={'icon-btn shrink-0 ' + (searchPane ? 'accent-txt' : '')}><Search size={16} /></button>}
           </div>
+          {activeRoom && latestPinnedMessage && (
+            <button onClick={() => setPinnedListOpen(true)} className="pinned-bar shrink-0 flex items-center gap-2 px-4 py-2 text-left border-b bd-soft">
+              <Pin size={14} className="accent-txt shrink-0" />
+              <PinnedAttachmentPreview pin={latestPinnedMessage} compact />
+              <span className="min-w-0 flex-1">
+                <span className="block text-[11px] accent-txt font-medium">{activePinnedMessages.length > 1 ? `当前有 ${activePinnedMessages.length} 条置顶消息` : '置顶消息'}</span>
+                <span className="block text-xs txt truncate">{pinnedTopPreview(latestPinnedMessage)}</span>
+              </span>
+              <ChevronRight size={14} className="txt-dim shrink-0" />
+            </button>
+          )}
           <div
             className="relative flex-1 min-h-0"
             onDragOver={(e) => { e.preventDefault(); if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files')) setDragOver(true) }}
@@ -3060,6 +3608,7 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
                             progressMap={fileProgress}
                             flashMid={flashMid}
                             onCtx={onCtx}
+                            mentionNames={mentionNameMap}
                             {...shared}
                           />
                         </div>
@@ -3074,7 +3623,7 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
                         onContextMenu={(!m.system && !m.recalled && m.mid) ? (e) => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY, m, canRecall: canRecallM }) } : undefined}
                       >
                         {m.system
-                          ? <div className="flex justify-center"><span className="system-msg">{m.text}</span></div>
+                          ? <div className="flex justify-center"><span className="system-msg">{localizeKnownNamesText(m.text, mentionNameMap)}</span></div>
                           : m.recalled
                             ? (
                               <div className="flex justify-center">
@@ -3084,9 +3633,11 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
                                 </span>
                               </div>
                               )
-                            : ((m.type === 'file' || m.type === 'file-offer')
-                                ? <FileMsg m={m} progress={fileProgress[m.mid]} onAccept={acceptFile} onReject={rejectFile} onCancel={cancelFile} onRetry={retryFile} selfAvatar={settings.avatar} peerAvatar={messageAvatar(m)} {...shared} />
-                                : <Bubble m={m} now={now} showName={isRoom && !m.self && ui === 0} markdown={!!settings.markdown} selectMode={selectMode} selected={!!selected[m.mid]} onToggleSelect={toggleSelect} selfAvatar={settings.avatar} peerAvatar={messageAvatar(m)} onRetry={retryMessage} {...shared} />)}
+                            : (m.share && m.share.type === 'share-entry'
+                                ? <ShareEntryMsg m={m} showName={isRoom && !m.self && ui === 0} onOpen={openSharedEntry} selfAvatar={settings.avatar} peerAvatar={messageAvatar(m)} onRetry={retryMessage} {...shared} />
+                                : ((m.type === 'file' || m.type === 'file-offer')
+                                    ? <FileMsg m={m} progress={fileProgress[m.mid]} onAccept={acceptFile} onReject={rejectFile} onCancel={cancelFile} onRetry={retryFile} selfAvatar={settings.avatar} peerAvatar={messageAvatar(m)} {...shared} />
+                                    : <Bubble m={m} now={now} showName={isRoom && !m.self && ui === 0} markdown={!!settings.markdown} selectMode={selectMode} selected={!!selected[m.mid]} onToggleSelect={toggleSelect} selfAvatar={settings.avatar} peerAvatar={messageAvatar(m)} onRetry={retryMessage} mentionNames={mentionNameMap} {...shared} />))}
                       </div>
                     )
                   })}
@@ -3126,8 +3677,15 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
               </div>
             )}
             {mentionList.length > 0 && (
-              <div className="absolute left-3 bottom-[60px] glass-panel rounded-xl p-1 z-10 w-48">
-                {mentionList.map((p) => <button key={p.id} onClick={() => insertMention(p.name)} className="w-full text-left px-2 py-1 rounded hover:bg-white/10 text-sm txt flex items-center gap-2"><Avatar name={p.name} id={p.id} size={18} avatar={p.avatar} />{p.name}</button>)}
+              <div className="absolute left-3 bottom-[60px] floating-popover" style={{ '--popover-w': '192px' }}>
+                {mentionList.map((p) => (
+                  <button key={p.id} onClick={() => insertMention(p)} title={p.mentionAll ? '通知所有群成员' : undefined} className="floating-menu-item">
+                    {p.mentionAll
+                      ? <span className="w-[18px] h-[18px] rounded-full inline-flex items-center justify-center shrink-0" style={{ background: 'var(--accent-tint)', color: 'var(--accent)' }}><Users size={12} /></span>
+                      : <Avatar name={p.name} id={p.id} size={18} avatar={p.avatar} />}
+                    <span className="truncate">{p.name}</span>
+                  </button>
+                ))}
               </div>
             )}
             {replyTo && (
@@ -3159,10 +3717,10 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
               <span className="relative">
                 <button ref={fontBtnRef} onClick={() => { setFontOpen((v) => !v); setEmojiOpen(false); setShotOpen(false) }} title="字体设置" className={'btn-ghost inline-flex items-center justify-center px-2.5 py-1 rounded-md text-[13.5px] font-semibold leading-none ' + (fontOpen ? 'accent-txt' : '')}>A</button>
                 {fontOpen && (
-                  <div ref={fontPanelRef} className="absolute bottom-full left-0 z-20 mb-1.5 rounded-xl p-2 w-44 shadow-xl" style={{ background: 'rgb(var(--panel-rgb))', border: '1px solid var(--border-hi)' }}>
+                  <div ref={fontPanelRef} className="absolute bottom-full left-0 mb-1.5 floating-popover" style={{ '--popover-w': '184px' }}>
                     <div className="space-y-0.5">
                       {CHAT_FONTS.map((f) => (
-                        <button key={f.label} onClick={() => patchSettings({ chatFont: f.family })} style={{ fontFamily: f.family, background: settings.chatFont === f.family ? 'var(--accent-tint)' : 'transparent' }} className="w-full flex items-center gap-1 px-2 py-1.5 rounded-lg hover:bg-white/10 text-[13.5px] txt text-left">
+                        <button key={f.label} onClick={() => patchSettings({ chatFont: f.family })} style={{ fontFamily: f.family, background: settings.chatFont === f.family ? 'var(--accent-tint)' : 'transparent' }} className="floating-menu-item">
                           <span className="flex-1 truncate">{f.label}</span>
                           {settings.chatFont === f.family && <Check size={13} className="accent-txt shrink-0" />}
                         </button>
@@ -3184,6 +3742,388 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
               <span className="relative">
                 <button ref={shotBtnRef} onClick={() => { setShotOpen((v) => !v); setEmojiOpen(false); setFontOpen(false) }} disabled={!canAttachActive} title="截图" className={'btn-ghost inline-flex items-center gap-1 px-2 py-1 rounded-md disabled:opacity-40 ' + (shotOpen ? 'accent-txt' : '')}><Camera size={14} /></button>
                 {shotOpen && (
-                  <div ref={shotPanelRef} className="absolute bottom-full left-0 z-20 mb-1.5 rounded-xl p-1.5 w-44 shadow-xl" style={{ background: 'rgb(var(--panel-rgb))', border: '1px solid var(--border-hi)' }}>
-                    <button onClick={() => takeShot('full')} className="side-item w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-left"><Monitor size={13} /> 截取屏幕</button>
-                    <button onClick={() => takeShot('hide')} className="side-item w-full flex items-center gap-2 px-
+                  <div ref={shotPanelRef} className="absolute bottom-full left-0 mb-1.5 floating-popover" style={{ '--popover-w': '184px' }}>
+                    <button onClick={() => takeShot('full')} className="floating-menu-item"><Monitor size={13} /> 截取屏幕</button>
+                    <button onClick={() => takeShot('hide')} className="floating-menu-item"><EyeOff size={13} /> 隐藏窗口截图</button>
+                  </div>
+                )}
+              </span>
+              {/* 表情按钮与面板：固定尺寸，内容区滚动懒加载；Emoji/表情包切换放在底部 */}
+              <span className="relative">
+                <button ref={emojiBtnRef} onClick={() => { setEmojiOpen((v) => !v); setFontOpen(false); setShotOpen(false) }} className={'btn-ghost inline-flex items-center gap-1 px-2 py-1 rounded-md ' + (emojiOpen ? 'accent-txt' : '')}><Smile size={14} /></button>
+                {emojiOpen && (
+                  <div ref={emojiPanelRef} className="absolute bottom-full left-0 mb-1.5 floating-popover flex flex-col" style={{ '--popover-w': '328px', height: 326 }}>
+                    <div onScroll={onEmojiPickerScroll} className="flex-1 min-h-0 overflow-auto scroll pr-1">
+                      {emojiTab === 'emoji' ? (
+                        <div className="grid grid-cols-8 gap-1">
+                          {/* key 带索引：EMOJIS 中存在重复表情，纯字符 key 重复会导致切换标签时渲染错位 */}
+                          {EMOJIS.slice(0, emojiVisibleCount).map((e, i) => <button key={i + e} onClick={() => { setText((t) => t + e); setEmojiOpen(false) }} className="text-lg rounded-lg hover:bg-[var(--hover)] min-h-8">{e}</button>)}
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-4 gap-1.5">
+                          {stickers.slice(0, stickerVisibleCount).map((s) => (
+                            <button
+                              key={s.id}
+                              onClick={() => sendSticker(s)}
+                              onContextMenu={(e) => { e.preventDefault(); removeSticker(s.id) }}
+                              title="点击发送 · 右键删除"
+                              className="rounded-lg hover:bg-[var(--hover)] p-1"
+                            >
+                              <StaticImg src={s.dataUrl} alt="" className="w-full h-14 object-contain" />
+                            </button>
+                          ))}
+                          {stickers.length === 0 && <div className="col-span-4 text-[11px] txt-dim text-center py-16">还没有表情包，点击下方“导入”添加图片（支持 GIF）</div>}
+                        </div>
+                      )}
+                    </div>
+                    <div className="mt-2 pt-2 border-t bd-soft flex items-center gap-1 shrink-0">
+                      <button onClick={() => setEmojiTab('emoji')} className={'text-[11px] rounded-lg px-2.5 py-1.5 ' + (emojiTab === 'emoji' ? 'btn-primary' : 'btn-ghost')}>Emoji</button>
+                      <button onClick={() => { setEmojiTab('sticker'); loadStickers() }} className={'text-[11px] rounded-lg px-2.5 py-1.5 ' + (emojiTab === 'sticker' ? 'btn-primary' : 'btn-ghost')}>表情包</button>
+                      {emojiTab === 'sticker' && <button onClick={importStickers} className="ml-auto btn-ghost text-[11px] rounded-lg px-2.5 py-1.5 inline-flex items-center gap-1"><Upload size={11} /> 导入</button>}
+                    </div>
+                  </div>
+                )}
+              </span>
+              <button onClick={attachFiles} disabled={!canAttachActive} title="发送文件" className="btn-ghost inline-flex items-center gap-1 px-2 py-1 rounded-md disabled:opacity-40"><Paperclip size={14} /></button>
+              <button onClick={() => { setSelectMode((v) => !v); setSelected({}) }} title="多选转发" className={'inline-flex items-center gap-1 px-2 py-1 rounded-md border transition ' + (selectMode ? 'border-emerald-500/50 accent-txt' : 'btn-ghost')}><Forward size={13} /></button>
+              {selectMode && <button onClick={() => setForwardOpen(true)} disabled={!Object.keys(selected).length} className="btn-primary text-xs rounded px-2 py-1 disabled:opacity-40">转发 {Object.keys(selected).length || ''}</button>}
+              {activePeer && (
+                <span className="relative" onMouseEnter={openNudgeHover} onMouseLeave={closeNudgeHover}>
+                  <button onClick={nudgeActive} disabled={!activePeer.online} title={activePeer.online ? '' : '对方离线'} className="btn-ghost inline-flex items-center gap-1 px-2 py-1 rounded-md disabled:opacity-40"><Hand size={14} /> 戳一戳</button>
+                  {/* 戳一戳自定义文字面板 */}
+                  {nudgeHover && (
+                    <div className="absolute bottom-full left-0 pb-1.5" onMouseEnter={openNudgeHover}>
+                      <div className="floating-popover" style={{ '--popover-w': '224px' }}>
+                        <div className="text-[10px] txt-dim mb-1">自定义戳一戳附带文字</div>
+                        <input
+                          value={nudgeDraft}
+                          maxLength={20}
+                          onChange={(e) => setNudgeDraft(e.target.value.slice(0, 20))}
+                          onBlur={commitNudgeText}
+                          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitNudgeText() } }}
+                          placeholder="最多 20 个字符"
+                          className="field w-full rounded-lg px-2 py-1 text-xs"
+                        />
+                      </div>
+                    </div>
+                  )}
+                </span>
+              )}
+              <button onClick={() => setBurnOn((v) => !v)} disabled={!canBurnActive} title={canBurnActive ? ('阅后即焚，' + burnTtl + ' 秒后删除') : '对方离线，阅后即焚不可用'} className={'inline-flex items-center gap-1 px-2 py-1 rounded-full border transition disabled:opacity-40 ' + (burnOn && canBurnActive ? 'burn-on' : 'btn-ghost')}><Flame size={13} /> 即焚 {burnOn && canBurnActive ? '开' : '关'}</button>
+              <span className="ml-auto shrink-0 inline-flex items-center gap-2.5">
+                {activeDraft && <span className="txt-dim text-[10.5px]">草稿已保存</span>}
+                <span className="composer-hint">
+                  <kbd>{(settings.sendKey || 'enter') === 'ctrlEnter' ? 'Ctrl+Enter' : 'Enter'}</kbd> 发送
+                  <span className="opacity-50">·</span>
+                  <kbd>{(settings.sendKey || 'enter') === 'ctrlEnter' ? 'Enter' : 'Shift+Enter'}</kbd> 换行
+                </span>
+              </span>
+            </div>
+            <div className="composer-input-wrap flex items-end gap-2">
+              <textarea ref={composerRef} value={text} onChange={onTextChange} onKeyDown={onKeyDown} onPaste={onComposerPaste} rows={1} placeholder={!active ? '请选择会话' : (!canSendActive ? (isRoom ? '群聊没有可接收成员' : '请选择会话') : `发送给 ${convTitle(active)}...`)} className="field composer-input flex-1 resize-none rounded-lg px-3 py-2 text-sm max-h-32" />
+              <button onClick={handleSend} disabled={(!text.trim() && !pendingAtts.length) || !canSendActive} className="btn-primary composer-send inline-flex items-center gap-1 rounded-lg px-3 py-2 text-sm font-medium disabled:opacity-40"><Send size={15} />{pendingAtts.length > 0 ? ` 发送 ${pendingAtts.length} 个文件` : ' 发送'}</button>
+            </div>
+          </div>        </main>
+
+        {!standalone && showDetail && <>
+          <div className="pane-resizer shrink-0" onMouseDown={startPaneDrag} title="拖拽调整宽度" />
+          <div className="detail-pane min-w-0 overflow-hidden flex" style={paneWidth ? { width: paneWidth } : undefined}>
+            <DetailPane
+              active={active}
+              activePeer={activePeer}
+              activeRoom={activeRoom}
+              roomMembers={roomMembers}
+              peers={peers}
+              self={self}
+              searchPane={searchPane}
+              convos={convos}
+              convTitle={convTitle}
+              locateMessage={locateMessage}
+              onOpenFile={(p) => api.file.open(p)}
+              onCloseSearch={() => setSearchPane(false)}
+              onMemberClick={(p) => { if (p.self) setShowProfile(true); else setProfilePeer(peerById(p.id) || p) }}
+              onAddMember={(ids) => addGroupMembers(activeRoom, ids)}
+              onKickMember={(p) => removeGroupMember(activeRoom, p)}
+              onOpenProfile={(p) => setProfilePeer(p)}
+              displayNameForId={displayNameForId}
+              mentionNames={mentionNameMap}
+            />
+          </div>
+        </>}
+      </div>
+
+      {historyOpen && active && (
+        <HistoryPanel
+          title={convTitle(active)}
+          messages={convos[active] || []}
+          selfName={self ? self.name : '?'}
+          selfAvatar={settings.avatar}
+          onLocate={(mid) => { setHistoryOpen(false); locateMessage(active, mid) }}
+          onOpenFile={(p) => api.file.open(p)}
+          onClose={() => setHistoryOpen(false)}
+          displayNameForId={displayNameForId}
+          mentionNames={mentionNameMap}
+        />
+      )}
+      {showSettings && <SettingsPanel settings={settings} onPatch={patchSettings} onClose={() => setShowSettings(false)} onLock={onLock} onReset={onReset} onClearHistory={clearAllHistory} onClearDrafts={clearAllDrafts} />}
+      {showProfile && self && <ProfileDialog person={{ ...self, avatar: settings.avatar }} editable settings={settings} onPatchSettings={patchSettings} onRename={renameSelf} onClose={() => setShowProfile(false)} />}
+      {profilePeer && <ProfileDialog person={profilePeer} onSetRemark={(v) => api.store.setRemark(profilePeer.id, v)} onClose={() => setProfilePeer(null)} />}
+      {sharePanel && activeRoom && <ShareSpacePanel room={activeRoom} self={self} peers={peers} nameById={nameById} onClose={() => setSharePanel(false)} requestConfirm={setConfirmAction} onForwardEntry={forwardShareEntry} initialTarget={sharePanelTarget} />}
+      {pinnedListOpen && activeRoom && (
+        <Overlay onClose={() => setPinnedListOpen(false)}>
+          <div className="floating-dialog floating-dialog-md floating-surface glass-panel floating-dialog-pad" role="dialog" aria-modal="true" aria-label="置顶消息">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-sm font-semibold txt inline-flex items-center gap-2"><Pin size={15} /> 置顶消息</div>
+                <div className="text-xs txt-dim mt-0.5 truncate">{activeRoom.name || '群聊'} · {activePinnedMessages.length} 条</div>
+              </div>
+              <button onClick={() => setPinnedListOpen(false)} className="txt-dim hover:opacity-70 shrink-0"><X size={16} /></button>
+            </div>
+            <div className="mt-4 max-h-[62vh] overflow-auto scroll space-y-2 pr-1">
+              {activePinnedMessages.length === 0 && <div className="text-xs txt-dim px-3 py-8 text-center">暂无置顶消息</div>}
+              {activePinnedMessages.map((pin) => {
+                const snap = pin.messageSnapshot || {}
+                return (
+                  <div key={pin.pinId} className="pinned-list-item rounded-xl p-3">
+                    <div className="flex items-start gap-2">
+                      <PinnedAttachmentPreview pin={pin} />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-start gap-2">
+                <div className="min-w-0 flex-1 text-sm txt whitespace-pre-wrap break-words">{localizeMentionsText(pin.contentPreview || snap.contentPreview || '[消息]', mentionNameMap)}</div>
+                          <PinnedMetaPopover pin={pin} />
+                        </div>
+                      </div>
+                    </div>
+                    <div className="mt-3 flex justify-end gap-2">
+                      <button onClick={() => viewPinnedOriginal(pin)} className="btn-ghost text-xs rounded-lg px-2.5 py-1.5">查看原消息</button>
+                      <button onClick={() => confirmUnpinPinnedMessage(pin)} className="btn-ghost text-xs rounded-lg px-2.5 py-1.5 text-red-400">取消置顶</button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </Overlay>
+      )}
+      {snapshotView && (
+        <Overlay onClose={() => setSnapshotView(null)}>
+          <div className="floating-dialog floating-dialog-md floating-surface glass-panel floating-dialog-pad" role="dialog" aria-modal="true" aria-label="置顶快照">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-sm font-semibold txt inline-flex items-center gap-2"><Pin size={15} /> 置顶快照</div>
+              <button onClick={() => setSnapshotView(null)} className="txt-dim hover:opacity-70 shrink-0"><X size={16} /></button>
+            </div>
+            <div className="mt-2 text-xs txt-dim leading-relaxed">{snapshotView.text}</div>
+            {(() => {
+              const pin = snapshotView.pin || {}
+              const snap = pin.messageSnapshot || {}
+              const original = snap.originalContent
+              const body = typeof original === 'string'
+                ? original
+                : (snap.contentPreview || pin.contentPreview || '[消息]')
+              return (
+                <div className="mt-4 rounded-xl p-3" style={{ background: 'var(--hover)', border: '1px solid var(--border-soft)' }}>
+                  <div className="flex items-start gap-3">
+                    <PinnedAttachmentPreview pin={pin} />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-start gap-2">
+                        <div className="min-w-0 flex-1 text-sm txt whitespace-pre-wrap break-words">{localizeMentionsText(body, mentionNameMap)}</div>
+                        <PinnedMetaPopover pin={pin} />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )
+            })()}
+          </div>
+        </Overlay>
+      )}
+      {confirmAction && <ConfirmDialog title={confirmAction.title} text={confirmAction.text} confirmText={confirmAction.confirmText} onClose={() => { setConfirmAction(null); focusComposer() }} onConfirm={() => { const action = confirmAction; setConfirmAction(null); setTimeout(() => action.run(), 0) }} />}
+      {showCreateGroup && (
+        <Overlay onClose={() => setShowCreateGroup(false)}>
+          <div className="floating-dialog floating-dialog-md floating-surface glass-panel floating-dialog-pad" role="dialog" aria-modal="true" aria-label="创建群聊">
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-semibold txt inline-flex items-center gap-2"><UserPlus size={16} /> 创建群聊</div>
+              <button onClick={() => setShowCreateGroup(false)} className="txt-dim hover:opacity-70"><X size={16} /></button>
+            </div>
+            <input autoFocus value={groupName} onChange={(e) => setGroupName(e.target.value.slice(0, 40))} placeholder="群聊名称" className="field mt-4 w-full rounded-lg px-3 py-2 text-sm" />
+            <div className="mt-4 text-xs txt-dim">选择成员（包含离线联系人）</div>
+            <div className="mt-2 max-h-72 overflow-auto scroll space-y-1">
+              {sortedPeers.length === 0 && <div className="text-xs txt-dim rounded-lg px-3 py-4" style={{ background: 'var(--hover)' }}>暂无可选联系人</div>}
+              {sortedPeers.map((p) => (
+                <label key={p.id} className="flex items-center gap-2 rounded-lg px-2 py-2 hover:bg-[var(--hover)] cursor-pointer">
+                  <input type="checkbox" checked={!!groupMembers[p.id]} onChange={() => toggleGroupMember(p.id)} className="accent-emerald-500" />
+                  <Avatar name={displayNameForPeer(p)} id={p.id} size={24} dim={!p.online} avatar={p.avatar} />
+                  <span className="text-sm txt flex-1 min-w-0 truncate">{displayNameForPeer(p)}</span>
+                  <span className={'text-[11px] ' + (p.online ? 'accent-txt' : 'txt-dim')}>{p.online ? '在线' : '离线'}</span>
+                </label>
+              ))}
+            </div>
+            <div className="mt-4 flex items-center justify-between">
+              <span className="text-xs txt-dim">已选 {selectedMemberCount} 人</span>
+              <div className="flex gap-2">
+                <button onClick={() => setShowCreateGroup(false)} className="btn-ghost text-sm rounded-lg px-3 py-1.5">取消</button>
+                <button onClick={createGroup} disabled={!groupName.trim() || !selectedMemberCount} className="btn-primary text-sm rounded-lg px-3 py-1.5 disabled:opacity-40">创建</button>
+              </div>
+            </div>
+          </div>
+        </Overlay>
+      )}
+      {managedGroup && (
+        <Overlay onClose={() => setGroupManage(null)}>
+          <div className="floating-dialog floating-dialog-md floating-surface glass-panel floating-dialog-pad" role="dialog" aria-modal="true" aria-label="群资料">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0 flex items-center gap-3">
+                <GroupAvatar group={managedGroup} size={44} />
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold txt truncate">{managedGroup.name}</div>
+                  <div className="text-xs txt-dim mt-0.5">{managedMembers.length} 位成员 · 群主 {((managedMembers.find((p) => p.id === managedGroup.ownerId) || {}).self ? '我' : ((managedMembers.find((p) => p.id === managedGroup.ownerId) || {}).name || convTitle(managedGroup.ownerId)))}</div>
+                  {managedGroup.ownerId === (self && self.id) && (
+                    <div className="mt-1.5 flex gap-2">
+                      <button onClick={() => changeGroupAvatar(managedGroup)} className="btn-ghost text-[11px] rounded-lg px-2 py-1 inline-flex items-center gap-1"><ImageIcon size={12} /> 更换群头像</button>
+                      {managedGroup.avatar && <button onClick={() => resetGroupAvatar(managedGroup)} className="btn-ghost text-[11px] rounded-lg px-2 py-1">恢复默认</button>}
+                      <button onClick={() => dismissGroup(managedGroup)} className="btn-ghost text-[11px] rounded-lg px-2 py-1 inline-flex items-center gap-1 text-red-500"><Trash2 size={12} /> 解散群聊</button>
+                    </div>
+                  )}
+                </div>
+              </div>
+              <button onClick={() => setGroupManage(null)} className="txt-dim hover:opacity-70 shrink-0"><X size={16} /></button>
+            </div>
+            <div className="mt-4 max-h-80 overflow-auto scroll space-y-1">
+              {managedMembers.map((p) => {
+                const isOwner = managedGroup.ownerId === p.id
+                const canTransfer = managedGroup.ownerId === (self && self.id) && !isOwner
+                return (
+                  <div key={p.id} className="flex items-center gap-2 rounded-lg px-2 py-2" style={{ background: isOwner ? 'var(--hover)' : 'transparent' }}>
+                    <Avatar name={p.name} id={p.id} size={26} dim={!p.online} avatar={p.avatar} />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm txt truncate">{p.self ? '我' : p.name}{isOwner && <Crown size={12} className="inline ml-1 accent-txt" />}</div>
+                      <div className="text-[11px]" style={{ color: presenceOf(p).color }}>{presenceOf(p).label}</div>
+                    </div>
+                    {canTransfer && <button onClick={() => transferGroupOwner(managedGroup, p.id)} className="btn-ghost text-xs rounded-lg px-2 py-1">转让群主</button>}
+                    {managedGroup.ownerId === (self && self.id) && !isOwner && !p.self && <button onClick={() => removeGroupMember(managedGroup, p)} className="btn-ghost text-xs rounded-lg px-2 py-1 text-red-400">移出</button>}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </Overlay>
+      )}
+      {forwardOpen && (
+        <Overlay onClose={() => setForwardOpen(false)}>
+          <div className="floating-dialog floating-dialog-sm floating-surface glass-panel floating-dialog-pad" role="dialog" aria-modal="true" aria-label="转发消息">
+            <div className="text-sm font-semibold txt mb-2">转发 {Object.keys(selected).length} 条消息</div>
+            <div className="seg-tabs grid grid-cols-2 gap-1 mb-1.5 text-xs">
+              <button onClick={() => setForwardMode('each')} className={forwardMode === 'each' ? 'seg-tab seg-tab-active' : 'seg-tab'}>逐条转发</button>
+              <button onClick={() => setForwardMode('merge')} className={forwardMode === 'merge' ? 'seg-tab seg-tab-active' : 'seg-tab'}>合并转发</button>
+            </div>
+            <div className="text-[10.5px] txt-dim mb-2">{forwardMode === 'each' ? '逐条发送到目标会话' : '合并为一条聊天记录发送'}</div>
+            {groups.length === 0 && peers.length === 0 && <div className="text-xs txt-dim px-2 py-3">暂无可转发会话</div>}
+            {groups.map((g) => <button key={g.id} onClick={() => doForward(g.id)} className="floating-menu-item"><GroupAvatar group={g} size={20} /> <span className="truncate">{g.name}</span></button>)}
+            {peers.map((p) => <button key={p.id} onClick={() => doForward(p.id)} className="floating-menu-item"><Avatar name={displayNameForPeer(p)} id={p.id} size={20} avatar={p.avatar} /> <span className="truncate">{displayNameForPeer(p)}</span></button>)}
+          </div>
+        </Overlay>
+      )}
+
+      {/* 会话右键菜单 */}
+      {sideMenu && (
+        <div className="floating-context-layer" onClick={() => setSideMenu(null)} onContextMenu={(e) => { e.preventDefault(); setSideMenu(null) }}>
+          <div
+            className="absolute floating-menu"
+            style={{ '--menu-w': '184px', left: Math.max(8, Math.min(sideMenu.x, window.innerWidth - 204)), top: Math.max(8, Math.min(sideMenu.y, window.innerHeight - 190)) }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button onClick={() => { togglePin(sideMenu.item.id); setSideMenu(null) }} className="floating-menu-item"><Pin size={14} /> {isPinned(sideMenu.item.id) ? '取消置顶' : '置顶'}</button>
+            <button onClick={() => { toggleMute(sideMenu.item.id); setSideMenu(null) }} className="floating-menu-item">{isMuted(sideMenu.item.id) ? <Bell size={14} /> : <BellOff size={14} />} {isMuted(sideMenu.item.id) ? '取消免打扰' : '免打扰'}</button>
+            <button onClick={() => { setSideMenu(null); clearConv(sideMenu.item.id) }} className="floating-menu-item"><Trash2 size={14} /> 清空会话</button>
+            {sideMenu.item.kind === 'room' && (
+              <button onClick={() => { setSideMenu(null); sideMenu.item.group && sideMenu.item.group.ownerId === (self && self.id) ? dismissGroup(sideMenu.item.group) : leaveGroup(sideMenu.item.group) }} className="floating-menu-item danger"><X size={14} /> {sideMenu.item.group && sideMenu.item.group.ownerId === (self && self.id) ? '解散群聊' : '退出群聊'}</button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 消息右键菜单 */}
+      {ctxMenu && (
+        <div className="floating-context-layer" onClick={() => setCtxMenu(null)} onContextMenu={(e) => { e.preventDefault(); setCtxMenu(null) }}>
+          <div
+            className="absolute floating-menu"
+            style={{ '--menu-w': '204px', left: Math.max(8, Math.min(ctxMenu.x, window.innerWidth - 224)), top: Math.max(8, Math.min(ctxMenu.y, window.innerHeight - 270)) }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex justify-between px-1.5 pb-1.5">
+              {REACTIONS.slice(0, 6).map((e) => (
+                <button key={e} onClick={() => { doReact(ctxMenu.m, e); setCtxMenu(null) }} className="text-base leading-none hover:scale-125 transition">{e}</button>
+              ))}
+            </div>
+            <div className="floating-menu-sep" />
+            <button onClick={() => { doReply(ctxMenu.m); setCtxMenu(null) }} className="floating-menu-item"><Reply size={14} /> 回复</button>
+            {ctxMenu.m.text && !isShareEntryMessage(ctxMenu.m) && (
+              <button onClick={() => { copyText(ctxMenu.m.text); setCtxMenu(null) }} className="floating-menu-item"><Copy size={14} /> 复制</button>
+            )}
+            {ctxMenu.m.text && !isShareEntryMessage(ctxMenu.m) && (
+              <button onClick={() => { setSelected({ [ctxMenu.m.mid]: true }); setSelectMode(true); setForwardOpen(true); setCtxMenu(null) }} className="floating-menu-item"><Forward size={14} /> 转发</button>
+            )}
+            {(ctxMenu.m.type === 'file') && ctxMenu.m.path && (
+              <button onClick={() => { api.file.open(ctxMenu.m.path); setCtxMenu(null) }} className="floating-menu-item"><FileIcon size={14} /> 打开文件</button>
+            )}
+            {isRoom && !ctxMenu.m.burn && ctxMenu.m.type !== 'file-offer' && (
+              pinnedRecordForMessage(active, ctxMenu.m.mid)
+                ? <button disabled className="floating-menu-item"><Pin size={14} /> 已置顶</button>
+                : <button onClick={() => { pinChatMessage(ctxMenu.m); setCtxMenu(null) }} className="floating-menu-item"><Pin size={14} /> 置顶此消息</button>
+            )}
+            {ctxMenu.canRecall && (
+              <button onClick={() => { doRecall(ctxMenu.m); setCtxMenu(null) }} className="floating-menu-item danger"><Undo2 size={14} /> 撤回</button>
+            )}
+          </div>
+        </div>
+      )}
+
+      <div className="fixed bottom-4 right-4 flex flex-col gap-2 items-end" style={{ zIndex: 'var(--z-toast)' }}>
+        {toasts.map((t) => (
+          <button key={t.id} aria-live="polite" aria-label={(t.title || '') + ' ' + (t.text || '')} onClick={() => { selectConv(t.conv); setToasts((p) => p.filter((x) => x.id !== t.id)) }} className={'glass-panel floating-toast text-left ' + (t.leaving ? 'toast-out' : 'toast-in')}>
+            <div className="text-xs font-medium txt truncate">{t.title}</div>
+            <div className="text-xs txt-dim truncate">{t.text}</div>
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+export default function App () {
+  const [authState, setAuthState] = useState('loading')
+  const [display, setDisplay] = useState({ theme: 'system', fontPx: 15, uiStyle: 'classic', chatFont: '', chatFontPx: 13.5 })
+  const params = new URLSearchParams(window.location.search)
+  const windowKind = params.get('window')
+  const standaloneConv = windowKind === 'chat' ? (params.get('conv') || '') : ''
+  const isShotWindow = windowKind === 'shot'
+
+  useEffect(() => {
+    // 登录/解锁页固定使用经典样式，进入主界面后才应用用户选择。
+    const effective = authState === 'unlocked' ? display : { ...display, uiStyle: 'classic' }
+    applyDisplay(effective)
+    const mq = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null
+    if (!mq) return
+    const onCh = () => applyDisplay(effective)
+    try { mq.addEventListener('change', onCh) } catch (_) { mq.addListener && mq.addListener(onCh) }
+    return () => { try { mq.removeEventListener('change', onCh) } catch (_) { mq.removeListener && mq.removeListener(onCh) } }
+  }, [display, authState])
+
+  useEffect(() => {
+    if (!api || !api.auth) { setAuthState('setup'); return }
+    api.auth.status().then((s) => setAuthState((s && s.state) || 'setup')).catch(() => setAuthState('setup'))
+  }, [])
+
+  if (isShotWindow) return <ShotScreen />
+
+  let screen
+  if (authState === 'loading') screen = <div className="auth-surface h-full flex flex-col"><TopBar /><Center><div className="text-sm txt-dim">加载中...</div></Center></div>
+  else if (authState === 'setup') screen = <SetupScreen onDone={() => setAuthState('unlocked')} />
+  else if (authState === 'locked') screen = <UnlockScreen onDone={() => setAuthState('unlocked')} onReset={() => setAuthState('setup')} />
+  else screen = <ChatScreen onLock={() => setAuthState('locked')} onReset={() => setAuthState('setup')} setDisplay={setDisplay} standaloneConv={standaloneConv} />
+
+  return <div className="app-bg txt h-full"><div className="app-shell">{screen}</div></div>
+}
+
+// padding: workspace mount sync lags one write behind; this trailing comment absorbs the truncation so real code stays intact when verified from the sandbox. -------------------------------------------------------------------------------------------------------------------------

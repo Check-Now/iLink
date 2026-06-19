@@ -4,57 +4,27 @@
 // 设计：
 //  - 共享空间数据存储在“共享主机”(创建者)本机；本模块只在主机进程运行，负责落盘与元数据管理。
 //  - 物理布局：
-//      <rootPath>/files/<目录树>/<文件...>           真实文件（含全部历史版本物理文件）
-//      <rootPath>/.ilink-share/meta.json             元数据（空间/目录项/版本/日志）
-//      <rootPath>/.trash/                            删除项（移入而非物理删除，可恢复）
-//  - 版本：版本0=原始名(需求文档.docx)，版本k=需求文档_VKK.docx，全部物理共存；
-//          主列表显示“逻辑名”(logicalBase+ext)，默认指向最新版本。
+//      <rootPath>/files/<目录树>/<文件...>       真实文件
+//      <rootPath>/.ilink-share/meta.json         元数据（空间/目录项/日志）
 //  - 安全：对端可控的名称一律净化；禁止路径穿越/盘符/通配符/Windows 保留名；落盘前 .part 暂存校验后改名。
 // 注意：本文件不依赖 electron，便于在 Node 下直接做单元测试。
 
 const fs = require('fs')
 const path = require('path')
 const crypto = require('crypto')
+const fsp = require('fs').promises
 const { win32 } = require('path')
 
 const META_DIR = '.ilink-share'
 const META_FILE = 'meta.json'
 const FILES_DIR = 'files'
-const TRASH_DIR = '.trash'
 const MAX_SEGMENT_LEN = 200
 const ROOT_ID = 'root'
+
 // Windows 保留设备名（基名，忽略大小写与扩展名）
 const RESERVED = new Set(['con', 'prn', 'aux', 'nul',
   'com1', 'com2', 'com3', 'com4', 'com5', 'com6', 'com7', 'com8', 'com9',
   'lpt1', 'lpt2', 'lpt3', 'lpt4', 'lpt5', 'lpt6', 'lpt7', 'lpt8', 'lpt9'])
-
-// -------- 纯函数：版本命名 / 名称解析（无 fs，便于测试） --------
-
-// 版本号补零：至少两位（V01..V99），超过 99 原样（V100...）
-function padVersion (n) {
-  n = parseInt(n, 10) || 0
-  return n < 100 ? String(n).padStart(2, '0') : String(n)
-}
-
-// 解析文件名 → { base, ext, versionNo }。
-//  - ext 含点(可能为'')；base 为去扩展名后的主体。
-//  - 仅当主体以 _V\d{2,} 结尾才识别为版本号，避免把普通名字误判（如“配置_V”不算）。
-function parseLogicalName (fileName) {
-  const name = String(fileName == null ? '' : fileName)
-  const ext = win32.extname(name)
-  let base = ext ? name.slice(0, name.length - ext.length) : name
-  let versionNo = 0
-  const m = base.match(/^(.+)_V(\d{2,})$/)
-  if (m) { base = m[1]; versionNo = parseInt(m[2], 10) }
-  return { base, ext, versionNo }
-}
-
-// 生成版本物理文件名：版本0=base+ext；版本k=base_VKK+ext
-function versionFileName (logicalBase, ext, versionNo) {
-  versionNo = parseInt(versionNo, 10) || 0
-  if (versionNo <= 0) return logicalBase + (ext || '')
-  return logicalBase + '_V' + padVersion(versionNo) + (ext || '')
-}
 
 function isReservedName (segment) {
   const base = win32.basename(String(segment || '')).split('.')[0].trim().toLowerCase()
@@ -106,12 +76,41 @@ function sha256File (filePath) {
   return h.digest('hex')
 }
 
-function moveInto (src, dest) {
-  // 先写到 .part 再改名，避免外部看到半成品；跨卷退回 copy+unlink
-  const part = dest + '.part'
-  try { fs.copyFileSync(src, part) } catch (e) { throw e }
-  fs.renameSync(part, dest)
-  try { fs.unlinkSync(src) } catch (_) {}
+// 异步流式计算 SHA-256（不阻塞事件循环，适合大文件）
+function sha256FileAsync (filePath) {
+  return new Promise((resolve, reject) => {
+    const h = crypto.createHash('sha256')
+    const rs = fs.createReadStream(filePath, { highWaterMark: 4 * 1024 * 1024 })
+    rs.on('error', reject)
+    rs.on('data', (d) => h.update(d))
+    rs.on('end', () => resolve(h.digest('hex')))
+  })
+}
+
+// 流式复制并上报已复制字节数（不阻塞主线程；用于本机上传时展示进度条）
+function copyWithProgress (src, dest, onProgress) {
+  return new Promise((resolve, reject) => {
+    let copied = 0
+    const rs = fs.createReadStream(src, { highWaterMark: 8 * 1024 * 1024 })
+    const ws = fs.createWriteStream(dest)
+    rs.on('error', reject); ws.on('error', reject)
+    rs.on('data', (chunk) => { copied += chunk.length; try { onProgress && onProgress(copied) } catch (_) {} })
+    ws.on('finish', () => resolve())
+    rs.pipe(ws)
+  })
+}
+
+// 异步落盘：同卷优先用 rename（瞬时）；跨卷或保留源文件时用异步复制（不阻塞主线程）。
+// keepSrc=true 表示源文件需保留（宿主本机上传自己的文件时，绝不删用户原文件）。onProgress 存在时流式复制并上报进度。
+async function moveIntoAsync (src, dest, keepSrc, onProgress) {
+  if (!keepSrc && !onProgress) {
+    try { await fsp.rename(src, dest); return } catch (e) { if (!e || e.code !== 'EXDEV') throw e } // 同卷瞬时；跨卷再退回 copy
+  }
+  const part = dest + '.part' // 写到 .part 再改名，避免外部看到半成品
+  if (onProgress) await copyWithProgress(src, part, onProgress)
+  else await fsp.copyFile(src, part)
+  await fsp.rename(part, dest)
+  if (!keepSrc) { try { await fsp.unlink(src) } catch (_) {} }
 }
 
 // ============ 单个共享空间的宿主存储 ============
@@ -121,7 +120,6 @@ class ShareStore {
     this.metaDir = path.join(rootPath, META_DIR)
     this.metaPath = path.join(this.metaDir, META_FILE)
     this.filesDir = path.join(rootPath, FILES_DIR)
-    this.trashDir = path.join(rootPath, TRASH_DIR)
     this.meta = null
   }
 
@@ -129,7 +127,6 @@ class ShareStore {
   static create (rootPath, space) {
     fs.mkdirSync(path.join(rootPath, META_DIR), { recursive: true })
     fs.mkdirSync(path.join(rootPath, FILES_DIR), { recursive: true })
-    fs.mkdirSync(path.join(rootPath, TRASH_DIR), { recursive: true })
     const now = Date.now()
     const store = new ShareStore(rootPath)
     store.meta = {
@@ -146,7 +143,6 @@ class ShareStore {
         status: 'normal',
       },
       entries: {},
-      versions: {},
       logs: [],
     }
     store._save()
@@ -163,7 +159,6 @@ class ShareStore {
     const raw = fs.readFileSync(this.metaPath, 'utf8')
     this.meta = JSON.parse(raw)
     if (!this.meta.entries) this.meta.entries = {}
-    if (!this.meta.versions) this.meta.versions = {}
     if (!Array.isArray(this.meta.logs)) this.meta.logs = []
     return this.meta
   }
@@ -205,10 +200,24 @@ class ShareStore {
     return abs
   }
 
+  _fileRelPath (entry) {
+    if (!entry || entry.type !== 'file') return ''
+    return entry.storageRelativePath || ((entry.relativePath ? entry.relativePath + '/' : '') + entry.name)
+  }
+
+  _fileAbs (entry) {
+    return this._absForRel(entry.relativePath || '', entry.name)
+  }
+
   _findChild (parentId, type, name) {
     const pid = parentId || ROOT_ID
     return Object.values(this.meta.entries).find((e) =>
       e.parentId === pid && e.status === 'normal' && e.type === type && e.name === name) || null
+  }
+
+  getEntry (entryId) {
+    const entry = this.meta.entries[entryId]
+    return entry && entry.status === 'normal' ? this._publicEntry(entry) : null
   }
 
   // -------- 查询 --------
@@ -220,7 +229,7 @@ class ShareStore {
     return { spaceId: s.spaceId, groupId: s.groupId, name: s.name, hostUserId: s.hostUserId, hostDeviceId: s.hostDeviceId, createdBy: s.createdBy, createdAt: s.createdAt, updatedAt, status: s.status, fileCount }
   }
 
-  // 列目录：返回该 parent 下 normal 的文件夹与文件(当前版本)。不含历史版本、不含 deleted。
+  // 列目录：返回该 parent 下 normal 的文件夹与文件。
   listDir (parentId) {
     const pid = parentId || ROOT_ID
     if (pid !== ROOT_ID) {
@@ -231,6 +240,22 @@ class ShareStore {
       .filter((e) => e.parentId === pid && e.status === 'normal')
       .map((e) => this._publicEntry(e))
     return { ok: true, parentId: pid, breadcrumb: this._breadcrumb(pid), entries }
+  }
+
+  search (query) {
+    const q = String(query || '').trim().toLowerCase()
+    if (!q) return { ok: true, entries: [] }
+    const entries = Object.values(this.meta.entries)
+      .filter((e) => e.status === 'normal' && String(e.name || '').toLowerCase().includes(q))
+      .map((e) => {
+        const breadcrumb = this._breadcrumb(e.type === 'folder' ? e.entryId : (e.parentId || ROOT_ID))
+        return {
+          ...this._publicEntry(e),
+          breadcrumb,
+          pathText: breadcrumb.map((c) => c.name).join(' / ') + (e.type === 'file' ? ' / ' + e.name : ''),
+        }
+      })
+    return { ok: true, entries }
   }
 
   _breadcrumb (parentId) {
@@ -249,10 +274,8 @@ class ShareStore {
   _publicEntry (e) {
     return {
       entryId: e.entryId, parentId: e.parentId, name: e.name, type: e.type, ext: e.ext || '',
-      currentVersion: e.currentVersion || 0, currentVersionId: e.currentVersionId || '',
       size: e.size || 0, hash: e.hash || '', relativePath: e.relativePath || '',
       createdBy: e.createdBy || '', updatedBy: e.updatedBy || '', createdAt: e.createdAt, updatedAt: e.updatedAt,
-      versionCount: Object.values(this.meta.versions).filter((v) => v.entryId === e.entryId).length,
     }
   }
 
@@ -272,8 +295,8 @@ class ShareStore {
     const entry = {
       entryId: crypto.randomUUID(), spaceId: this.meta.space.spaceId, groupId: this.meta.space.groupId,
       parentId: parentId || ROOT_ID, name, type: 'folder', ext: '', relativePath: rel,
-      currentVersion: 0, currentVersionId: '', size: 0, hash: '',
-      createdBy: operatorId || '', updatedBy: operatorId || '', createdAt: now, updatedAt: now, status: 'normal',
+      size: 0, hash: '', createdBy: operatorId || '', updatedBy: operatorId || '',
+      createdAt: now, updatedAt: now, status: 'normal',
     }
     this.meta.entries[entry.entryId] = entry
     this._log(operatorId, 'create_folder', entry.entryId, name)
@@ -281,174 +304,114 @@ class ShareStore {
     return { ok: true, entry: this._publicEntry(entry) }
   }
 
-  // -------- 上传文件（新文件 / 新版本） --------
-  // opts: { fileName, tempPath, uploadedBy, intent:'new'|'version', entryId, changeNote, rename:bool }
-  placeUpload (opts) {
+  // -------- 上传文件（仅新文件）。异步，避免大文件同步 I/O 阻塞主进程 --------
+  // opts: { fileName, tempPath|srcPath, uploadedBy, parentId, rename, hash, copyOnly }
+  //   hash: 传输层已校验的 SHA-256，可跳过对大文件的二次哈希；copyOnly: 复制源文件进库并保留源（宿主本机上传）
+  async placeUpload (opts) {
     const o = opts || {}
-    const tempPath = o.tempPath
+    const tempPath = o.tempPath || o.srcPath
+    const keepSrc = !!o.copyOnly
     if (!tempPath || !fs.existsSync(tempPath)) return { ok: false, error: '临时文件不存在' }
     const uploadedBy = o.uploadedBy || ''
-    let size = 0; let hash = ''
-    try { size = fs.statSync(tempPath).size; hash = sha256File(tempPath) } catch (e) { return { ok: false, error: '读取临时文件失败' } }
+    let size = 0; let hash = o.hash || ''
+    try { size = fs.statSync(tempPath).size } catch (e) { return { ok: false, error: '读取临时文件失败' } }
+    if (!hash) { try { hash = await sha256FileAsync(tempPath) } catch (e) { return { ok: false, error: '读取临时文件失败' } } }
 
-    if (o.intent === 'version') {
-      const entry = this.meta.entries[o.entryId]
-      if (!entry || entry.type !== 'file' || entry.status !== 'normal') return { ok: false, error: '目标文件不存在' }
-      const nextNo = (entry.currentVersion || 0) + 1
-      // 命名永远基于目标条目的逻辑基名，避免 _V01_V02 叠加；忽略上传文件原名
-      const vfname = versionFileName(entry.logicalBase, entry.ext, nextNo)
-      let abs
-      try { abs = this._absForRel(entry.relativePath, vfname) } catch (e) { return { ok: false, error: String(e.message || e) } }
-      try { moveInto(tempPath, abs) } catch (e) { return { ok: false, error: '落盘失败:' + (e.message || e) } }
-      const now = Date.now()
-      const version = {
-        versionId: crypto.randomUUID(), entryId: entry.entryId, spaceId: entry.spaceId, groupId: entry.groupId,
-        versionNo: nextNo, versionFileName: vfname, fileSize: size, fileHash: hash,
-        storageRelativePath: (entry.relativePath ? entry.relativePath + '/' : '') + vfname,
-        uploadedBy, uploadedAt: now, changeNote: String(o.changeNote || '').slice(0, 300),
-      }
-      this.meta.versions[version.versionId] = version
-      entry.currentVersion = nextNo; entry.currentVersionId = version.versionId
-      entry.size = size; entry.hash = hash; entry.updatedBy = uploadedBy; entry.updatedAt = now
-      this._log(uploadedBy, 'upload_version', entry.entryId, vfname)
-      this._save()
-      return { ok: true, entry: this._publicEntry(entry), version }
-    }
-
-    // 新文件
-    const parsed = parseLogicalName(safeFileName(o.fileName, 'file'))
-    const logicalBase = parsed.base
-    const ext = parsed.ext
-    let displayName = logicalBase + ext
+    let displayName = safeFileName(o.fileName, 'file')
     let parentRel
     try { parentRel = this._parentRelPath(o.parentId) } catch (e) { return { ok: false, error: String(e.message || e) } }
 
     const existing = this._findChild(o.parentId || ROOT_ID, 'file', displayName)
     if (existing && !o.rename) {
-      // 重名且未指定改名 → 交回上层决策（改名为新文件 / 作为新版本）。绝不静默覆盖。
+      // 重名且未指定改名 → 交回上层决策（改名为新文件 / 跳过）。绝不静默覆盖。
       return { ok: false, conflict: true, entryId: existing.entryId, name: displayName, error: '同名文件已存在' }
     }
     if (existing && o.rename) {
-      // 作为新文件改名：追加 (n) 直到不冲突
+      const ext = win32.extname(displayName)
+      const base = ext ? displayName.slice(0, displayName.length - ext.length) : displayName
       let i = 1
-      while (this._findChild(o.parentId || ROOT_ID, 'file', logicalBase + '(' + i + ')' + ext)) i++
-      displayName = logicalBase + '(' + i + ')' + ext
+      while (this._findChild(o.parentId || ROOT_ID, 'file', base + '(' + i + ')' + ext)) i++
+      displayName = base + '(' + i + ')' + ext
     }
-    const newBase = parseLogicalName(displayName).base
+    const ext = win32.extname(displayName)
     const rel = parentRel ? parentRel + '/' + displayName : displayName
     let abs
     try { abs = this._absForRel(parentRel, displayName) } catch (e) { return { ok: false, error: String(e.message || e) } }
     fs.mkdirSync(path.dirname(abs), { recursive: true })
-    try { moveInto(tempPath, abs) } catch (e) { return { ok: false, error: '落盘失败:' + (e.message || e) } }
+    try { await moveIntoAsync(tempPath, abs, keepSrc, o.onProgress ? (b) => o.onProgress(b, size) : null) } catch (e) { return { ok: false, error: '落盘失败:' + (e.message || e) } }
     const now = Date.now()
     const entryId = crypto.randomUUID()
-    const version = {
-      versionId: crypto.randomUUID(), entryId, spaceId: this.meta.space.spaceId, groupId: this.meta.space.groupId,
-      versionNo: 0, versionFileName: displayName, fileSize: size, fileHash: hash,
-      storageRelativePath: rel, uploadedBy, uploadedAt: now, changeNote: String(o.changeNote || '').slice(0, 300),
-    }
     const entry = {
       entryId, spaceId: this.meta.space.spaceId, groupId: this.meta.space.groupId,
-      parentId: o.parentId || ROOT_ID, name: displayName, type: 'file', ext, logicalBase: newBase,
-      currentVersion: 0, currentVersionId: version.versionId, size, hash,
-      relativePath: parentRel, createdBy: uploadedBy, updatedBy: uploadedBy, createdAt: now, updatedAt: now, status: 'normal',
+      parentId: o.parentId || ROOT_ID, name: displayName, type: 'file', ext,
+      size, hash, relativePath: parentRel, storageRelativePath: rel,
+      createdBy: uploadedBy, updatedBy: uploadedBy, createdAt: now, updatedAt: now, status: 'normal',
     }
-    this.meta.versions[version.versionId] = version
     this.meta.entries[entryId] = entry
     this._log(uploadedBy, 'upload_file', entryId, displayName)
-    this._save()
-    return { ok: true, entry: this._publicEntry(entry), version }
-  }
-
-  // -------- 历史版本 --------
-  listHistory (entryId) {
-    const entry = this.meta.entries[entryId]
-    if (!entry || entry.type !== 'file') return { ok: false, error: '文件不存在' }
-    const versions = Object.values(this.meta.versions)
-      .filter((v) => v.entryId === entryId)
-      .sort((a, b) => b.versionNo - a.versionNo)
-      .map((v) => ({ versionId: v.versionId, versionNo: v.versionNo, versionFileName: v.versionFileName, fileSize: v.fileSize, fileHash: v.fileHash, uploadedBy: v.uploadedBy, uploadedAt: v.uploadedAt, changeNote: v.changeNote || '' }))
-    return { ok: true, entryId, name: entry.name, versions }
-  }
-
-  // 取某版本的绝对路径（供下载）。version 缺省取当前版本。
-  versionAbsPath (entryId, versionId) {
-    const entry = this.meta.entries[entryId]
-    if (!entry || entry.type !== 'file' || entry.status !== 'normal') return null
-    const vid = versionId || entry.currentVersionId
-    const v = this.meta.versions[vid]
-    if (!v || v.entryId !== entryId) return null
-    let abs
-    try { abs = this._absForRel('', v.storageRelativePath) } catch (_) { return null }
-    if (!fs.existsSync(abs)) return null
-    return { abs, fileName: v.versionFileName, size: v.fileSize, hash: v.fileHash, versionNo: v.versionNo }
-  }
-
-  // -------- 重命名 --------
-  rename (operatorId, entryId, newName) {
-    const entry = this.meta.entries[entryId]
-    if (!entry || entry.status !== 'normal') return { ok: false, error: '条目不存在' }
-    const chk = checkSegment(newName)
-    if (!chk.ok) return { ok: false, error: chk.error }
-    newName = chk.value
-    if (entry.type === 'folder') {
-      if (this._findChild(entry.parentId, 'folder', newName)) return { ok: false, error: '同名文件夹已存在' }
-      const parentRel = entry.relativePath.includes('/') ? entry.relativePath.slice(0, entry.relativePath.lastIndexOf('/')) : ''
-      const oldRel = entry.relativePath
-      const newRel = parentRel ? parentRel + '/' + newName : newName
-      let oldAbs, newAbs
-      try { oldAbs = this._absForRel(oldRel, ''); newAbs = this._absForRel(newRel, '') } catch (e) { return { ok: false, error: String(e.message || e) } }
-      if (fs.existsSync(newAbs)) return { ok: false, error: '目标目录已存在' }
-      fs.renameSync(oldAbs, newAbs)
-      // 更新自身与所有后代的 relativePath/storageRelativePath 前缀
-      const prefix = oldRel + '/'
-      for (const e of Object.values(this.meta.entries)) {
-        if (e.entryId === entry.entryId) continue
-        if (e.relativePath === oldRel) e.relativePath = newRel
-        else if (e.relativePath && e.relativePath.startsWith(prefix)) e.relativePath = newRel + '/' + e.relativePath.slice(prefix.length)
-      }
-      for (const v of Object.values(this.meta.versions)) {
-        if (v.storageRelativePath === oldRel) v.storageRelativePath = newRel
-        else if (v.storageRelativePath && v.storageRelativePath.startsWith(prefix)) v.storageRelativePath = newRel + '/' + v.storageRelativePath.slice(prefix.length)
-      }
-      entry.name = newName; entry.relativePath = newRel; entry.updatedBy = operatorId; entry.updatedAt = Date.now()
-      this._log(operatorId, 'rename', entry.entryId, newName)
-      this._save()
-      return { ok: true, entry: this._publicEntry(entry) }
-    }
-    // 文件重命名：保持版本关系——逻辑基名整体更名，所有物理版本文件随之改名
-    const parsed = parseLogicalName(newName)
-    const newBase = parsed.base; const newExt = parsed.ext
-    const newDisplay = newBase + newExt
-    if (this._findChild(entry.parentId, 'file', newDisplay)) return { ok: false, error: '同名文件已存在' }
-    const versions = Object.values(this.meta.versions).filter((v) => v.entryId === entryId)
-    // 预校验目标文件不存在
-    for (const v of versions) {
-      const vname = versionFileName(newBase, newExt, v.versionNo)
-      const abs = this._absForRel(entry.relativePath, vname)
-      const oldAbs = this._absForRel('', v.storageRelativePath)
-      if (abs !== oldAbs && fs.existsSync(abs)) return { ok: false, error: '目标文件名冲突' }
-    }
-    for (const v of versions) {
-      const vname = versionFileName(newBase, newExt, v.versionNo)
-      const oldAbs = this._absForRel('', v.storageRelativePath)
-      const newAbs = this._absForRel(entry.relativePath, vname)
-      if (oldAbs !== newAbs) { try { fs.renameSync(oldAbs, newAbs) } catch (e) { return { ok: false, error: '重命名失败:' + (e.message || e) } } }
-      v.versionFileName = vname
-      v.storageRelativePath = (entry.relativePath ? entry.relativePath + '/' : '') + vname
-    }
-    entry.name = newDisplay; entry.logicalBase = newBase; entry.ext = newExt; entry.updatedBy = operatorId; entry.updatedAt = Date.now()
-    this._log(operatorId, 'rename', entry.entryId, newDisplay)
     this._save()
     return { ok: true, entry: this._publicEntry(entry) }
   }
 
-  // -------- 删除（移入 .trash，标记 deleted，历史版本一并保留入回收站） --------
+  // -------- 下载清单 --------
+  // 返回某个文件或文件夹下所有可下载文件；文件夹清单中的 relativePath 保留文件夹根目录。
+  downloadList (entryId) {
+    const entry = this.meta.entries[entryId]
+    if (!entry || entry.status !== 'normal') return { ok: false, error: '条目不存在' }
+    if (entry.type === 'file') {
+      let abs
+      try { abs = this._fileAbs(entry) } catch (_) { return { ok: false, error: '文件路径无效' } }
+      if (!fs.existsSync(abs)) return { ok: false, error: '文件不存在' }
+      return { ok: true, type: 'file', rootName: entry.name, files: [{ entryId: entry.entryId, abs, fileName: entry.name, relativePath: entry.name, size: entry.size || 0, hash: entry.hash || '' }] }
+    }
+    if (entry.type !== 'folder') return { ok: false, error: '条目类型无效' }
+    const rootRel = entry.relativePath
+    const prefix = rootRel + '/'
+    const files = []
+    for (const e of Object.values(this.meta.entries)) {
+      if (!e || e.status !== 'normal' || e.type !== 'file') continue
+      if (!(e.relativePath === rootRel || (e.relativePath && e.relativePath.startsWith(prefix)))) continue
+      let abs
+      try { abs = this._fileAbs(e) } catch (_) { continue }
+      if (!fs.existsSync(abs)) continue
+      files.push({ entryId: e.entryId, abs, fileName: e.name, relativePath: this._fileRelPath(e), size: e.size || 0, hash: e.hash || '' })
+    }
+    return { ok: true, type: 'folder', rootName: entry.name, files }
+  }
+
+  // -------- 重命名（仅文件夹） --------
+  rename (operatorId, entryId, newName) {
+    const entry = this.meta.entries[entryId]
+    if (!entry || entry.status !== 'normal') return { ok: false, error: '条目不存在' }
+    if (entry.type !== 'folder') return { ok: false, error: '文件不支持重命名' }
+    const chk = checkSegment(newName)
+    if (!chk.ok) return { ok: false, error: chk.error }
+    newName = chk.value
+    if (this._findChild(entry.parentId, 'folder', newName)) return { ok: false, error: '同名文件夹已存在' }
+    const parentRel = entry.relativePath.includes('/') ? entry.relativePath.slice(0, entry.relativePath.lastIndexOf('/')) : ''
+    const oldRel = entry.relativePath
+    const newRel = parentRel ? parentRel + '/' + newName : newName
+    let oldAbs, newAbs
+    try { oldAbs = this._absForRel(oldRel, ''); newAbs = this._absForRel(newRel, '') } catch (e) { return { ok: false, error: String(e.message || e) } }
+    if (fs.existsSync(newAbs)) return { ok: false, error: '目标目录已存在' }
+    fs.renameSync(oldAbs, newAbs)
+    const prefix = oldRel + '/'
+    for (const e of Object.values(this.meta.entries)) {
+      if (e.entryId === entry.entryId) continue
+      if (e.relativePath === oldRel) e.relativePath = newRel
+      else if (e.relativePath && e.relativePath.startsWith(prefix)) e.relativePath = newRel + '/' + e.relativePath.slice(prefix.length)
+      if (e.type === 'file') e.storageRelativePath = (e.relativePath ? e.relativePath + '/' : '') + e.name
+    }
+    entry.name = newName; entry.relativePath = newRel; entry.updatedBy = operatorId; entry.updatedAt = Date.now()
+    this._log(operatorId, 'rename_folder', entry.entryId, newName)
+    this._save()
+    return { ok: true, entry: this._publicEntry(entry) }
+  }
+
+  // -------- 删除：真删除文件/文件夹（文件夹含所有后代）。不可恢复。 --------
   remove (operatorId, entryId) {
     const entry = this.meta.entries[entryId]
     if (!entry || entry.status !== 'normal') return { ok: false, error: '条目不存在' }
-    const stamp = Date.now() + '-' + entry.entryId.slice(0, 8)
-    // 收集要标 deleted 的条目（文件夹含后代）
     const affected = [entry]
     if (entry.type === 'folder') {
       const prefix = entry.relativePath + '/'
@@ -457,37 +420,26 @@ class ShareStore {
       }
     }
     try {
-      fs.mkdirSync(this.trashDir, { recursive: true })
       if (entry.type === 'folder') {
-        const src = this._absForRel(entry.relativePath, '')
-        const dst = path.join(this.trashDir, stamp + '__' + entry.name)
-        if (fs.existsSync(src)) fs.renameSync(src, dst)
+        const abs = this._absForRel(entry.relativePath, '')
+        if (fs.existsSync(abs)) fs.rmSync(abs, { recursive: true, force: true })
       } else {
-        // 文件：把该条目的所有物理版本文件移入回收站
-        const dir = path.join(this.trashDir, stamp + '__' + entry.name)
-        fs.mkdirSync(dir, { recursive: true })
-        for (const v of Object.values(this.meta.versions)) {
-          if (v.entryId !== entry.entryId) continue
-          const src = this._absForRel('', v.storageRelativePath)
-          if (fs.existsSync(src)) fs.renameSync(src, path.join(dir, v.versionFileName))
-        }
+        const abs = this._fileAbs(entry)
+        if (fs.existsSync(abs)) fs.unlinkSync(abs)
       }
-    } catch (e) { return { ok: false, error: '移入回收站失败:' + (e.message || e) } }
-    const now = Date.now()
-    for (const e of affected) { e.status = 'deleted'; e.updatedAt = now; e.updatedBy = operatorId; e.trashStamp = stamp }
+    } catch (e) { return { ok: false, error: '删除失败:' + (e.message || e) } }
+    const ids = new Set(affected.map((e) => e.entryId))
+    for (const id of ids) delete this.meta.entries[id]
     this._log(operatorId, 'delete', entry.entryId, entry.name)
     this._save()
     return { ok: true, entryId: entry.entryId, affected: affected.length }
   }
 
-  recentLogs (n) {
-    return this.meta.logs.slice(-(n || 50)).reverse()
-  }
 }
 
 module.exports = {
   ShareStore,
   // 纯函数导出（供测试与复用）
-  parseLogicalName, versionFileName, padVersion, isReservedName, checkSegment, safeFileName, isInside, sha256File,
+  isReservedName, checkSegment, safeFileName, isInside, sha256File,
   ROOT_ID,
 }

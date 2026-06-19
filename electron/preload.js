@@ -38,6 +38,8 @@ contextBridge.exposeInMainWorld('api', {
     transferGroupOwner: (groupId, ownerId) => ipcRenderer.invoke('store:transferGroupOwner', groupId, ownerId),
     setGroupAvatar: (groupId, avatar) => ipcRenderer.invoke('store:setGroupAvatar', groupId, avatar),
     leaveGroup: (groupId) => ipcRenderer.invoke('store:leaveGroup', groupId),
+    dismissGroup: (groupId) => ipcRenderer.invoke('store:dismissGroup', groupId),
+    getPinnedMessages: (groupId) => ipcRenderer.invoke('store:getPinnedMessages', groupId),
     onGroups: (cb) => sub('store:groups', cb),
   },
 
@@ -79,6 +81,7 @@ contextBridge.exposeInMainWorld('api', {
 
   ui: {
     setUnread: (n) => ipcRenderer.invoke('ui:setUnread', n),
+    attention: (opts) => ipcRenderer.invoke('ui:attention', opts || {}),
   },
 
   chat: {
@@ -119,7 +122,45 @@ contextBridge.exposeInMainWorld('api', {
     pickFiles: () => ipcRenderer.invoke('share:pickFiles'),
     pickFolder: () => ipcRenderer.invoke('share:pickFolder'),
     dir: (spaceId, parentId) => ipcRenderer.invoke('share:dir', spaceId, parentId),
-    history: (spaceId, entryId) => ipcRenderer.invoke('share:history', spaceId, entryId),
+    search: (groupId, query, spaceId) => ipcRenderer.invoke('share:search', groupId, query, spaceId),
     createFolder: (spaceId, parentId, name) => ipcRenderer.invoke('share:createFolder', spaceId, parentId, name),
     rename: (spaceId, entryId, newName) => ipcRenderer.invoke('share:rename', spaceId, entryId, newName),
-    remove: (spaceId, entryId) => ipcRenderer.invoke('share:delete'
+    remove: (spaceId, entryId) => ipcRenderer.invoke('share:delete', spaceId, entryId),
+    upload: (spaceId, parentId, paths, rename) => ipcRenderer.invoke('share:upload', spaceId, parentId, paths, rename),
+    uploadFolder: (spaceId, parentId, dirPath) => ipcRenderer.invoke('share:uploadFolder', spaceId, parentId, dirPath),
+    download: (spaceId, entryId, suggestedName, saveDir) => ipcRenderer.invoke('share:download', spaceId, entryId, suggestedName, saveDir),
+    onChanged: (cb) => sub('share:changed', cb),
+    onProgress: (cb) => sub('share:progress', cb),
+    onDownloaded: (cb) => sub('share:downloaded', cb),
+    onDownloadFailed: (cb) => sub('share:downloadFailed', cb),
+  },
+
+  shot: {
+    begin: (mode) => ipcRenderer.invoke('shot:begin', mode),
+    getImage: () => ipcRenderer.invoke('shot:getImage'),
+    done: (dataUrl) => ipcRenderer.invoke('shot:done', dataUrl),
+    copy: (dataUrl) => ipcRenderer.invoke('shot:copy', dataUrl),
+    save: (dataUrl) => ipcRenderer.invoke('shot:save', dataUrl),
+    cancel: () => ipcRenderer.invoke('shot:cancel'),
+    onResult: (cb) => sub('shot:result', cb),
+  },
+
+  msg: {
+    recall: (scope, toId, mid) => ipcRenderer.invoke('msg:recall', scope, toId, mid),
+    react: (scope, toId, mid, emoji) => ipcRenderer.invoke('msg:react', scope, toId, mid, emoji),
+    pin: (groupId, message) => ipcRenderer.invoke('msg:pin', groupId, message),
+    unpin: (groupId, pinId) => ipcRenderer.invoke('msg:unpin', groupId, pinId),
+    onRecall: (cb) => sub('msg:recall', cb),
+    onReaction: (cb) => sub('msg:reaction', cb),
+    onPinned: (cb) => sub('msg:pinned', cb),
+    onUnpinned: (cb) => sub('msg:unpinned', cb),
+    onPinnedList: (cb) => sub('msg:pinned-list', cb),
+    onNudge: (cb) => sub('msg:nudge', cb),
+    onStatus: (cb) => sub('msg:status', cb),
+  },
+
+  sys: {
+    openExternal: (url) => ipcRenderer.invoke('sys:openExternal', url),
+    revealLog: () => ipcRenderer.invoke('sys:revealLog'),
+  },
+})

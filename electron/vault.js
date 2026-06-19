@@ -14,6 +14,7 @@ const cryptoMod = require('./crypto')
 const SCRYPT = { N: 16384, r: 8, p: 1, keyLen: 32 }
 const MAGIC = 'FREEDOM_VAULT_OK'
 const HISTORY_CAP = 1000
+const PINNED_MESSAGE_CAP = 10
 const DAY_MS = 24 * 60 * 60 * 1000 // 一天的毫秒数（历史保留裁剪用）
 const SAVE_DEBOUNCE_MS = 300       // 落盘去抖：合并 300ms 内的多次写
 
@@ -66,6 +67,9 @@ class Vault {
     if (!data.drafts) data.drafts = {}
     if (!data.reads || typeof data.reads !== 'object') data.reads = {} // 各会话已读位(ts)，用于跨重启恢复未读数
     if (!data.outbox || typeof data.outbox !== 'object') data.outbox = {} // 离线发件箱:peerId -> [item]，持久化待发(文本/文件)
+    if (!Array.isArray(data.groupPinnedMessages)) data.groupPinnedMessages = []
+    data.groupPinnedMessages = data.groupPinnedMessages.map((p) => this._normalizePinnedMessage(p)).filter(Boolean)
+    if (!Array.isArray(data.groupPinnedMessageLogs)) data.groupPinnedMessageLogs = []
     if (!Array.isArray(data.shareSpaces)) data.shareSpaces = [] // 群共享空间·已知空间列表(宿主含 rootPath/isHost)
     if (!data.shareSnapshots || typeof data.shareSnapshots !== 'object') data.shareSnapshots = {} // 共享空间目录缓存快照(离线只读用)
     if (!data.createdAt) data.createdAt = Date.now()
@@ -114,6 +118,94 @@ class Vault {
     if (typeof s.broadcastAddrs !== 'string') s.broadcastAddrs = ''
     if (!s.avatar || typeof s.avatar !== 'object') s.avatar = { type: 'text', text: '', color: '' }
     return s
+  }
+
+  _normalizePinnedMessage (pin) {
+    if (!pin || !pin.pinId || !pin.groupId) return null
+    const snap = pin.messageSnapshot && typeof pin.messageSnapshot === 'object' ? pin.messageSnapshot : {}
+    const messageId = String(pin.messageId || snap.messageId || '')
+    const senderId = String(pin.senderId || snap.senderId || '')
+    const senderName = String(pin.senderName || snap.senderName || '')
+    const messageType = String(pin.messageType || snap.messageType || 'text')
+    const contentPreview = String(pin.contentPreview || snap.contentPreview || '').slice(0, 200)
+    const pinnedAt = Number(pin.pinnedAt || pin.createdAt || pin.updatedAt || Date.now())
+    const updatedAt = Number(pin.updatedAt || pinnedAt || Date.now())
+    const status = ['pinned', 'unpinned', 'deleted'].includes(pin.status) ? pin.status : 'pinned'
+    const messageSnapshot = {
+      messageId,
+      senderId,
+      senderName,
+      messageType,
+      contentPreview,
+      sentAt: Number(snap.sentAt || pin.sentAt || 0),
+    }
+    if (snap.originalContent !== undefined) messageSnapshot.originalContent = snap.originalContent
+    if (snap.fileName !== undefined) messageSnapshot.fileName = snap.fileName
+    if (snap.fileSize !== undefined) messageSnapshot.fileSize = snap.fileSize
+    if (snap.mime !== undefined) messageSnapshot.mime = snap.mime
+    if (snap.thumbnailDataUrl !== undefined) messageSnapshot.thumbnailDataUrl = snap.thumbnailDataUrl
+    if (snap.localPath !== undefined) messageSnapshot.localPath = snap.localPath
+    return {
+      pinId: String(pin.pinId),
+      groupId: String(pin.groupId),
+      messageId,
+      messageSnapshot,
+      senderId,
+      senderName,
+      messageType,
+      contentPreview,
+      pinnedBy: String(pin.pinnedBy || ''),
+      pinnedByName: String(pin.pinnedByName || ''),
+      pinnedAt,
+      status,
+      updatedAt,
+    }
+  }
+
+  _clonePinned (pin) {
+    return pin ? JSON.parse(JSON.stringify(pin)) : null
+  }
+
+  _activePinnedMessages (groupId) {
+    return (this.data && this.data.groupPinnedMessages ? this.data.groupPinnedMessages : [])
+      .filter((p) => p && p.groupId === groupId && p.status === 'pinned')
+  }
+
+  _upsertPinnedMessageRaw (pin) {
+    if (!this.data || !pin) return { changed: false, pin: null }
+    if (!Array.isArray(this.data.groupPinnedMessages)) this.data.groupPinnedMessages = []
+    const incoming = this._normalizePinnedMessage(pin)
+    if (!incoming) return { changed: false, pin: null }
+    const i = this.data.groupPinnedMessages.findIndex((p) => p.pinId === incoming.pinId)
+    if (i >= 0) {
+      const prev = this._normalizePinnedMessage(this.data.groupPinnedMessages[i])
+      if (prev && (incoming.updatedAt || 0) < (prev.updatedAt || 0)) return { changed: false, pin: this._clonePinned(prev) }
+      if (prev && prev.status !== 'pinned' && incoming.status === 'pinned' && (incoming.updatedAt || 0) <= (prev.updatedAt || 0)) return { changed: false, pin: this._clonePinned(prev) }
+      this.data.groupPinnedMessages[i] = {
+        ...prev,
+        ...incoming,
+        messageSnapshot: { ...((prev && prev.messageSnapshot) || {}), ...(incoming.messageSnapshot || {}) },
+      }
+      return { changed: true, pin: this._clonePinned(this.data.groupPinnedMessages[i]) }
+    }
+    this.data.groupPinnedMessages.push(incoming)
+    return { changed: true, pin: this._clonePinned(incoming) }
+  }
+
+  _appendPinnedLog (pin, operatorId, action, detail) {
+    if (!this.data) return
+    if (!Array.isArray(this.data.groupPinnedMessageLogs)) this.data.groupPinnedMessageLogs = []
+    this.data.groupPinnedMessageLogs.push({
+      logId: crypto.randomUUID(),
+      pinId: pin.pinId,
+      groupId: pin.groupId,
+      messageId: pin.messageId,
+      operatorId: operatorId || '',
+      action,
+      detail: detail || '',
+      createdAt: Date.now(),
+    })
+    if (this.data.groupPinnedMessageLogs.length > 500) this.data.groupPinnedMessageLogs.splice(0, this.data.groupPinnedMessageLogs.length - 500)
   }
 
   _writeAccount (obj) {
@@ -397,4 +489,168 @@ class Vault {
     if (!this.data.drafts) this.data.drafts = {}
     if (text && text.trim()) this.data.drafts[convId] = text
     else delete this.data.drafts[convId]
-    t
+    this._save()
+  }
+
+  getPinnedMessages (groupId, opts) {
+    if (!this.data) return []
+    const includeInactive = !!(opts && opts.includeInactive)
+    let arr = (this.data.groupPinnedMessages || []).filter((p) => p && (!groupId || p.groupId === groupId))
+    arr = arr.map((p) => this._normalizePinnedMessage(p)).filter(Boolean)
+    arr.sort((a, b) => (b.pinnedAt || 0) - (a.pinnedAt || 0) || String(b.pinId).localeCompare(String(a.pinId)))
+    if (includeInactive) return arr.map((p) => this._clonePinned(p))
+    const seenMessages = new Set()
+    const out = []
+    for (const p of arr) {
+      if (p.status !== 'pinned') continue
+      const key = p.groupId + ':' + p.messageId
+      if (seenMessages.has(key)) continue
+      seenMessages.add(key)
+      out.push(this._clonePinned(p))
+    }
+    return out
+  }
+
+  getPinnedMessagesByGroup () {
+    const out = {}
+    for (const p of this.getPinnedMessages()) {
+      if (!out[p.groupId]) out[p.groupId] = []
+      out[p.groupId].push(p)
+    }
+    return out
+  }
+
+  getPinnedSyncState (groupIds) {
+    const allow = Array.isArray(groupIds) && groupIds.length ? new Set(groupIds) : null
+    const groups = {}
+    for (const p of this.getPinnedMessages(null, { includeInactive: true })) {
+      if (allow && !allow.has(p.groupId)) continue
+      if (!groups[p.groupId]) groups[p.groupId] = []
+      groups[p.groupId].push(p)
+    }
+    return Object.keys(groups).map((groupId) => ({ groupId, pins: groups[groupId] }))
+  }
+
+  addPinnedMessage (pin) {
+    if (!this.data) return { ok: false, error: '未解锁' }
+    const next = this._normalizePinnedMessage({ ...pin, status: 'pinned' })
+    if (!next || !next.groupId || !next.messageId) return { ok: false, error: '置顶消息数据不完整' }
+    const active = this._activePinnedMessages(next.groupId)
+    if (active.some((p) => p.messageId === next.messageId)) return { ok: false, error: '该消息已置顶' }
+    if (active.length >= PINNED_MESSAGE_CAP) return { ok: false, error: '置顶消息已达上限，请先取消旧置顶' }
+    const res = this._upsertPinnedMessageRaw(next)
+    if (res.changed) {
+      this._appendPinnedLog(next, next.pinnedBy, 'pin')
+      this._save()
+    }
+    return { ok: true, pin: res.pin || this._clonePinned(next) }
+  }
+
+  unpinMessage (groupId, pinId, operatorId, operatorName) {
+    if (!this.data) return { ok: false, error: '未解锁' }
+    const list = this.data.groupPinnedMessages || []
+    const i = list.findIndex((p) => p && p.pinId === pinId && p.groupId === groupId)
+    if (i < 0) return { ok: false, error: '置顶消息不存在' }
+    const prev = this._normalizePinnedMessage(list[i])
+    const next = {
+      ...prev,
+      status: 'unpinned',
+      updatedAt: Date.now(),
+      unpinnedBy: operatorId || '',
+      unpinnedByName: operatorName || '',
+    }
+    list[i] = next
+    this._appendPinnedLog(next, operatorId, 'unpin')
+    this._save()
+    return { ok: true, pin: this._clonePinned(next) }
+  }
+
+  mergePinnedMessages (pins) {
+    if (!this.data || !Array.isArray(pins)) return { changed: false, pins: [] }
+    let changed = false
+    const merged = []
+    for (const raw of pins) {
+      const res = this._upsertPinnedMessageRaw(raw)
+      if (res.pin) merged.push(res.pin)
+      if (res.changed) changed = true
+    }
+    if (changed) this._save()
+    return { changed, pins: merged }
+  }
+
+  // -------- 群共享空间（已知空间列表 + 目录缓存快照）--------
+  getShareSpaces () { return this.data ? (this.data.shareSpaces || []) : [] }
+  getShareSpacesByGroup (groupId) { return this.getShareSpaces().filter((s) => s.groupId === groupId && s.status !== 'deleted') }
+  getShareSpace (spaceId) { return this.getShareSpaces().find((s) => s.spaceId === spaceId) || null }
+  upsertShareSpace (space) {
+    if (!this.data || !space || !space.spaceId) return null
+    if (!Array.isArray(this.data.shareSpaces)) this.data.shareSpaces = []
+    const i = this.data.shareSpaces.findIndex((s) => s.spaceId === space.spaceId)
+    if (i >= 0) this.data.shareSpaces[i] = { ...this.data.shareSpaces[i], ...space }
+    else this.data.shareSpaces.push(space)
+    this._save()
+    return this.getShareSpace(space.spaceId)
+  }
+  removeShareSpace (spaceId) {
+    if (!this.data || !Array.isArray(this.data.shareSpaces)) return
+    const i = this.data.shareSpaces.findIndex((s) => s.spaceId === spaceId)
+    if (i >= 0) { this.data.shareSpaces.splice(i, 1); if (this.data.shareSnapshots) delete this.data.shareSnapshots[spaceId]; this._save() }
+  }
+  getShareSnapshot (spaceId, parentId) {
+    const sp = this.data && this.data.shareSnapshots && this.data.shareSnapshots[spaceId]
+    return sp ? (sp[parentId || 'root'] || null) : null
+  }
+  setShareSnapshot (spaceId, parentId, data) {
+    if (!this.data) return
+    if (!this.data.shareSnapshots) this.data.shareSnapshots = {}
+    if (!this.data.shareSnapshots[spaceId]) this.data.shareSnapshots[spaceId] = {}
+    this.data.shareSnapshots[spaceId][parentId || 'root'] = { ...data, ts: Date.now() }
+    this._save()
+  }
+  clearShareSnapshot (spaceId) {
+    if (this.data && this.data.shareSnapshots) { delete this.data.shareSnapshots[spaceId]; this._save() }
+  }
+
+  searchShareSnapshots (groupId, query, spaceId) {
+    if (!this.data) return []
+    const q = String(query || '').trim().toLowerCase()
+    if (!q) return []
+    const spaces = this.getShareSpacesByGroup(groupId).filter((s) => !spaceId || s.spaceId === spaceId)
+    const snapsRoot = this.data.shareSnapshots || {}
+    const out = []
+    const seen = new Set()
+    for (const sp of spaces) {
+      const snaps = snapsRoot[sp.spaceId] || {}
+      for (const [pid, snap] of Object.entries(snaps)) {
+        for (const e of ((snap && snap.entries) || [])) {
+          if (!e || !e.entryId || !String(e.name || '').toLowerCase().includes(q)) continue
+          const key = sp.spaceId + ':' + e.entryId
+          if (seen.has(key)) continue
+          seen.add(key)
+          const baseCrumbs = Array.isArray(snap.breadcrumb) && snap.breadcrumb.length ? snap.breadcrumb : [{ entryId: 'root', name: '根目录' }]
+          const breadcrumb = e.type === 'folder' ? baseCrumbs.concat([{ entryId: e.entryId, name: e.name }]) : baseCrumbs
+          out.push({
+            ...e,
+            parentId: e.parentId || pid || 'root',
+            spaceId: sp.spaceId,
+            spaceName: sp.name,
+            breadcrumb,
+            pathText: breadcrumb.map((c) => c.name).join(' / ') + (e.type === 'file' ? ' / ' + e.name : ''),
+            cached: true,
+            offline: true,
+          })
+        }
+      }
+    }
+    return out
+  }
+
+  getSettings () { return this.data ? { ...this.data.settings } : {} }
+
+  setSettings (patch) {
+    if (this.data) { this.data.settings = { ...this.data.settings, ...(patch || {}) }; this._save() }
+    return this.getSettings()
+  }
+}
+
+module.exports = { Vault, PINNED_MESSAGE_CAP }

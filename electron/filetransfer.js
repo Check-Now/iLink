@@ -201,7 +201,7 @@ class FileTransfer extends EventEmitter {
         }
         const commit = () => {
           if (done) return; done = true
-          this.emit('done', { mid: meta.msgMid || meta.mid, transferMid: meta.mid, from, name: meta.name, fname: meta.fname, size: meta.size, mime: meta.mime, scope: meta.scope, to: meta.to, batch: meta.batch || null, sticker: !!meta.sticker, ts: meta.ts || null, share: meta.share || null, tempPath })
+          this.emit('done', { mid: meta.msgMid || meta.mid, transferMid: meta.mid, from, name: meta.name, fname: meta.fname, size: meta.size, mime: meta.mime, scope: meta.scope, to: meta.to, batch: meta.batch || null, sticker: !!meta.sticker, ts: meta.ts || null, share: meta.share || null, sha256: meta.sha256 || null, tempPath })
         }
         if (!meta.sha256) return commit() // 旧发送端无 sha256：仅校验大小
         // 对完整 .part 重算 SHA-256（复用 _hashFile；兼容续传：增量哈希无法覆盖续传前已落盘部分）
@@ -257,4 +257,9 @@ class FileTransfer extends EventEmitter {
     })
     // 未收到 EOF 就断开 = 传输不完整：保留 .part 以便续传（finishing 期间是收尾校验，忽略）
     socket.on('end', () => { if (!done && !finishing && meta) fail(false) })
-    socke
+    socket.on('error', () => { if (!done && !finishing) fail(false) })
+    socket.setTimeout(SOCKET_TIMEOUT_MS, () => { if (!done && !finishing) fail(false) })
+  }
+}
+
+module.exports = { FileTransfer, guessMime }

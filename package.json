@@ -37,4 +37,10 @@
     "concurrently": "^8.2.2",
     "cross-env": "^7.0.3",
     "electron": "^30.5.1",
-    "electron-builder": "^24
+    "electron-builder": "^24.13.3",
+    "postcss": "^8.4.38",
+    "tailwindcss": "^3.4.4",
+    "vite": "^5.2.0",
+    "wait-on": "^7.2.0"
+  }
+}
