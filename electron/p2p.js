@@ -204,8 +204,19 @@ class P2P extends EventEmitter {
   }
 
   _sendPresenceUnicast (address, uport) {
-    if (!this.uniSock || !uport || !address) return
-    this.uniSock.send(this._presencePacket(), uport, address, () => {})
+    this._unicast({ address, uport }, this._presencePacket())
+  }
+
+  _unicast (peer, pkt, cb) {
+    if (!this.uniSock || !peer || !peer.address || !peer.uport) {
+      return false
+    }
+    try {
+      this.uniSock.send(pkt, peer.uport, peer.address, cb || (() => {}))
+      return true
+    } catch (e) {
+      return false
+    }
   }
 
   _keyForPub (pubB64) {
@@ -269,7 +280,7 @@ class P2P extends EventEmitter {
     if (m.t === 'recall') {
       this.emit('recall', { from: m.from, scope: m.scope, roomId: m.roomId || null, mid: m.mid })
       // 私聊撤回回 ACK，发送端据此确认送达后停止补发（覆盖对端"假在线"/离线后上线）
-      if (m.scope !== 'room') { const peer = this.peers.get(m.from); if (peer && peer.uport && peer.address) try { this.uniSock.send(this._encode({ t: 'recallack', from: this.id, mid: m.mid }), peer.uport, peer.address, () => {}) } catch (_) {} }
+      if (m.scope !== 'room') { const peer = this.peers.get(m.from); this._unicast(peer, this._encode({ t: 'recallack', from: this.id, mid: m.mid })) }
       return
     }
     if (m.t === 'recallack') { this.emit('recall-ack', { from: m.from, mid: m.mid }); return }
@@ -384,7 +395,7 @@ class P2P extends EventEmitter {
   sendNudge (toId, text) {
     const peer = this.peers.get(toId)
     if (!peer || !peer.online || !peer.uport || !peer.address) return
-    this.uniSock.send(this._encode({ t: 'nudge', from: this.id, to: toId, text: (text || '').toString().slice(0, 30) }), peer.uport, peer.address, () => {})
+    this._unicast(peer, this._encode({ t: 'nudge', from: this.id, to: toId, text: (text || '').toString().slice(0, 30) }))
   }
 
   // 群共享空间·加密单播控制信令。obj: { kind, reqId, action, data }。返回 { ok } 或 { ok:false, error }
@@ -397,7 +408,7 @@ class P2P extends EventEmitter {
     const enc = cryptoMod.encrypt(key, JSON.stringify(obj || {}))
     const pkt = this._encode({ t: 'share', from: this.id, to: toId, spub: this.pub, sport: this.uport, enc })
     if (pkt.length > SAFE_DATAGRAM_BYTES) return { ok: false, error: '载荷过大(目录项过多)，请分目录查看' }
-    try { this.uniSock.send(pkt, peer.uport, peer.address, () => {}) } catch (e) { return { ok: false, error: String(e) } }
+    if (!this._unicast(peer, pkt)) return { ok: false, error: 'unicast unavailable' }
     return { ok: true }
   }
 
@@ -411,7 +422,7 @@ class P2P extends EventEmitter {
     const enc = cryptoMod.encrypt(key, JSON.stringify(obj || {}))
     const pkt = this._encode({ t: 'pin', from: this.id, to: toId, spub: this.pub, sport: this.uport, enc })
     if (pkt.length > SAFE_DATAGRAM_BYTES) return { ok: false, error: '置顶消息列表过大' }
-    try { this.uniSock.send(pkt, peer.uport, peer.address, () => {}) } catch (e) { return { ok: false, error: String(e) } }
+    if (!this._unicast(peer, pkt)) return { ok: false, error: 'unicast unavailable' }
     return { ok: true }
   }
 
@@ -443,8 +454,8 @@ class P2P extends EventEmitter {
 
   // -------- 私聊消息可靠投递:ACK 确认 + 超时重发 --------
   _sendAck (toId, address, uport, mid) {
-    if (!this.uniSock || !address || !uport || !mid) return
-    try { this.uniSock.send(this._encode({ t: 'ack', from: this.id, to: toId, mid }), uport, address, () => {}) } catch (_) {}
+    if (!mid) return
+    this._unicast({ address, uport }, this._encode({ t: 'ack', from: this.id, to: toId, mid }))
   }
   _onAck (m) {
     const e = this.pending.get(m.mid)
@@ -469,7 +480,7 @@ class P2P extends EventEmitter {
       return
     }
     e.attempts++
-    try { this.uniSock.send(e.pkt, peer.uport, peer.address, () => {}) } catch (_) {}
+    this._unicast(peer, e.pkt)
     e.timer = setTimeout(() => this._retryAck(mid), ACK_TIMEOUT_MS)
   }
   _clearPending (mid) {
@@ -500,11 +511,15 @@ class P2P extends EventEmitter {
     this._clearPending(mid)
     const enc = cryptoMod.encrypt(key, this._buildPlaintext(text, opts))
     const pkt = this._encode({ t: 'msg', scope: 'private', from: this.id, to: toId, spub: this.pub, sport: this.uport, mid, ts: Date.now(), enc })
-    this.uniSock.send(pkt, peer.uport, peer.address, (err) => {
+    const sent = this._unicast(peer, pkt, (err) => {
       if (burn) return
       if (err) { this._clearPending(mid); this.emit('msg-status', { mid, toId, status: 'failed' }) }
       else this.emit('msg-status', { mid, toId, status: 'sent' })
     })
+    if (!sent) {
+      if (!burn) { this._clearPending(mid); this.emit('msg-status', { mid, toId, status: 'failed' }) }
+      return { ok: false, error: 'unicast unavailable' }
+    }
     if (!burn) this._trackAck(mid, toId, pkt)
     return { ok: true }
   }
@@ -564,10 +579,15 @@ class P2P extends EventEmitter {
     const roomMeta = { id: room.id, name: room.name || '群聊', ownerId: room.ownerId || '', members: room.members || [] }
     const enc = { [toId]: cryptoMod.encrypt(key, this._buildPlaintext(text, { ...(opts || {}), room: roomMeta })) }
     const pkt = this._encode({ t: 'msg', scope: 'room', roomId: room.id, from: this.id, to: toId, did, spub: this.pub, sport: this.uport, mid, ts: Date.now(), enc })
-    this.uniSock.send(pkt, peer.uport, peer.address, (err) => {
+    const sent = this._unicast(peer, pkt, (err) => {
       if (err) { this._clearPending(did); this.emit('msg-status', { mid: did, toId, status: 'failed' }) }
       else this.emit('msg-status', { mid: did, toId, status: 'sent' })
     })
+    if (!sent) {
+      this._clearPending(did)
+      this.emit('msg-status', { mid: did, toId, status: 'failed' })
+      return { ok: false, error: 'unicast unavailable' }
+    }
     this._trackAck(did, toId, pkt) // 接收端回执 mid=did → _onAck(pending.get(did)) → emit delivered{mid:did}
     return { ok: true }
   }
@@ -577,7 +597,7 @@ class P2P extends EventEmitter {
   sendTyping (toId) {
     const peer = this.peers.get(toId)
     if (!peer || !peer.online || !peer.address || !peer.uport) return
-    this.uniSock.send(this._encode({ t: 'typing', from: this.id, to: toId }), peer.uport, peer.address, () => {})
+    this._unicast(peer, this._encode({ t: 'typing', from: this.id, to: toId }))
   }
 
   // 群头像更新:逐成员加密单播(不随普通消息携带,避免 UDP 包超限)
@@ -591,7 +611,7 @@ class P2P extends EventEmitter {
       const key = this._keyForPub(peer.pub)
       if (!key) continue
       const pkt = this._encode({ t: 'room-avatar', from: this.id, enc: cryptoMod.encrypt(key, payload) })
-      this.uniSock.send(pkt, peer.uport, peer.address, () => {})
+      this._unicast(peer, pkt)
     }
   }
 
@@ -603,7 +623,7 @@ class P2P extends EventEmitter {
       if (id === this.id) continue
       const peer = this.peers.get(id)
       if (!peer || !peer.online || !peer.address || !peer.uport) continue
-      this.uniSock.send(pkt, peer.uport, peer.address, () => {})
+      this._unicast(peer, pkt)
     }
   }
 
@@ -615,12 +635,12 @@ class P2P extends EventEmitter {
       if (this.uniSock) {
         for (const peer of this.peers.values()) {
           if (!peer || !peer.online || !peer.uport || !peer.address) continue
-          this.uniSock.send(pkt, peer.uport, peer.address, () => {})
+          this._unicast(peer, pkt)
         }
       }
     } else {
       const peer = this.peers.get(toId)
-      if (peer && peer.online && peer.uport && peer.address) this.uniSock.send(pkt, peer.uport, peer.address, () => {})
+      if (peer && peer.online && peer.uport && peer.address) this._unicast(peer, pkt)
     }
   }
   sendRecall (scope, toId, mid) {

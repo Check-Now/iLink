@@ -14,6 +14,7 @@ const path = require('path')
 const crypto = require('crypto')
 const fsp = require('fs').promises
 const { win32 } = require('path')
+const { safeFileName: normalizeSafeFileName } = require('./pathutil')
 
 const META_DIR = '.ilink-share'
 const META_FILE = 'meta.json'
@@ -47,15 +48,7 @@ function checkSegment (name) {
 
 // 把任意（可能来自对端的）文件名净化为安全的纯文件名（用于上传落盘兜底，绝不抛错）
 function safeFileName (name, fallback) {
-  const fb = (fallback && String(fallback)) || 'file'
-  let n = win32.basename(String(name == null ? '' : name))
-  n = n.replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').replace(/^\.+$/, '').replace(/[. ]+$/, '').trim()
-  if (!n || isReservedName(n)) n = win32.basename(fb) || 'file'
-  if (n.length > MAX_SEGMENT_LEN) {
-    const ext = win32.extname(n).slice(0, 16)
-    n = n.slice(0, MAX_SEGMENT_LEN - ext.length) + ext
-  }
-  return n
+  return normalizeSafeFileName(name, fallback)
 }
 
 // 确保 child 解析后仍位于 root 之内（最后一道路径穿越防线）

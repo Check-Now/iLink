@@ -215,6 +215,30 @@ class Vault {
     fs.renameSync(tmp, this.accountPath)
   }
 
+  _backupCorruptStore (cause) {
+    let backupPath = null
+    if (fs.existsSync(this.storePath)) {
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+      let candidate = this.storePath + '.corrupt-' + stamp
+      let i = 1
+      while (fs.existsSync(candidate)) candidate = this.storePath + '.corrupt-' + stamp + '-' + (i++)
+      try {
+        fs.renameSync(this.storePath, candidate)
+        backupPath = candidate
+      } catch (_) {
+        try {
+          fs.copyFileSync(this.storePath, candidate)
+          backupPath = candidate
+        } catch (_) {}
+      }
+    }
+    const err = new Error('Vault store is corrupted; original data was not overwritten' + (backupPath ? (': ' + backupPath) : ''))
+    err.code = 'ERR_VAULT_STORE_CORRUPT'
+    err.backupPath = backupPath
+    err.cause = cause
+    return err
+  }
+
   _saveNow () {
     if (!this.key || !this.data) return
     this._ensureDir()
@@ -260,7 +284,7 @@ class Vault {
     try { ok = cryptoMod.decryptBuf(key, Buffer.from(account.verifier, 'base64')).toString('utf8') === MAGIC } catch (_) { ok = false }
     if (!ok) throw new Error('密码错误')
     let data
-    try { data = JSON.parse(cryptoMod.decryptBuf(key, fs.readFileSync(this.storePath)).toString('utf8')) } catch (_) { data = {} }
+    try { data = JSON.parse(cryptoMod.decryptBuf(key, fs.readFileSync(this.storePath)).toString('utf8')) } catch (e) { throw this._backupCorruptStore(e) }
     this.key = key
     this.data = this._ensureFields(data)
     this.unlocked = true

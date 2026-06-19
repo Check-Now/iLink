@@ -133,7 +133,6 @@ class FileTransfer extends EventEmitter {
     socket.on('error', () => this.emit('failed', { mid }))
     socket.setTimeout(SOCKET_TIMEOUT_MS, () => { socket.destroy(); this.emit('failed', { mid }) })
     socket.on('connect', () => {
-      socket.setTimeout(0)
       this._writeFrame(socket, Buffer.from(JSON.stringify({ v: 1, from: this.id, spub: this.pub, resume: true }), 'utf8'))
       hashReady.then(() => {
         if (socket.destroyed) return

@@ -33,6 +33,7 @@ const runtime = { minimizeToTray: true, notifyEnabled: true, notifyPreview: true
 const pinnedSyncLastRequest = new Map()
 const PINNED_SYNC_THROTTLE_MS = 10000
 const PINNED_THUMB_MAX_CHARS = 16 * 1024
+const TEMP_IMAGE_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
 // 应用图标：项目根目录 icon.png，dev 与打包后都可解析
 let appIconImg = null
@@ -171,6 +172,46 @@ function mergedPeers () {
 
 function emitPeers () {
   sendToRenderer('p2p:peers', mergedPeers())
+}
+
+function selfId () {
+  const identity = vault && vault.unlocked ? vault.getIdentity() : null
+  return (identity && identity.id) || (p2p && p2p.id) || ''
+}
+
+function emitGroups () {
+  if (vault && vault.unlocked) sendToRenderer('store:groups', vault.getGroups())
+}
+
+function getGroupById (groupId) {
+  if (!vault || !vault.unlocked || !groupId) return null
+  return (vault.getGroups() || []).find((g) => g && g.id === groupId) || null
+}
+
+function groupMembers (group) {
+  return Array.isArray(group && group.members) ? group.members : []
+}
+
+function isGroupMember (group, userId) {
+  return !!(group && userId && groupMembers(group).includes(userId))
+}
+
+function isGroupOwner (group, userId) {
+  return !!(group && userId && group.ownerId === userId)
+}
+
+function requireGroupMember (groupId, userId, notFoundError, notMemberError) {
+  const group = getGroupById(groupId)
+  if (!group) return { ok: false, error: notFoundError || '群聊不存在' }
+  if (!isGroupMember(group, userId)) return { ok: false, error: notMemberError || '你不是群成员' }
+  return { ok: true, group }
+}
+
+function requireGroupOwner (groupId, userId, notFoundError, notOwnerError) {
+  const group = getGroupById(groupId)
+  if (!group) return { ok: false, error: notFoundError || '群聊不存在' }
+  if (!isGroupOwner(group, userId)) return { ok: false, error: notOwnerError || '只有群主可以操作' }
+  return { ok: true, group }
 }
 
 // 审计日志：记录在线/离线变化（仅 id/昵称元数据）
@@ -497,18 +538,18 @@ function startP2P () {
   p2p.on('message', (m) => {
     if (m.scope === 'group') return
     if (m.room && vault && vault.unlocked && m.system === 'group-dismissed') {
-      const known = vault.getGroups().find((g) => g.id === m.room.id)
+      const known = getGroupById(m.room.id)
       const ownerId = (known && known.ownerId) || m.room.ownerId
       if (ownerId && ownerId === m.from) {
         removeLocalGroupData(m.room.id)
-        sendToRenderer('store:groups', vault.getGroups())
+        emitGroups()
         sendToRenderer('share:changed', { groupId: m.room.id })
       }
       return
     }
-    if (m.room && vault && vault.unlocked && m.system === 'member-removed' && !(m.room.members || []).includes(p2p.id)) {
+    if (m.room && vault && vault.unlocked && m.system === 'member-removed' && !isGroupMember(m.room, selfId())) {
       removeLocalGroupData(m.room.id)
-      sendToRenderer('store:groups', vault.getGroups())
+      emitGroups()
       sendToRenderer('share:changed', { groupId: m.room.id })
       return
     }
@@ -526,7 +567,7 @@ function startP2P () {
       vault.appendMessage(convId, m)
     }
     sendToRenderer('p2p:message', m)
-    if (m.room) sendToRenderer('store:groups', vault.getGroups())
+    if (m.room) emitGroups()
     // 群头像更新、共享空间广播、取消置顶只保留聊天框内文字，不闪任务栏、不发系统通知
     const silent = m.system === 'avatar-changed' || m.system === 'message_unpinned' || (typeof m.system === 'string' && m.system.indexOf('share-') === 0)
     if (!silent && (!muted || mutedByMention) && !runtime.dnd && mainWindow && !mainWindow.isFocused()) {
@@ -575,10 +616,10 @@ function startP2P () {
   })
   p2p.on('room-avatar', (r) => {
     if (!vault || !vault.unlocked) return
-    const group = vault.getGroups().find((g) => g.id === r.roomId)
+    const group = getGroupById(r.roomId)
     if (!group || group.ownerId !== r.from) return // 仅接受群主发送的头像更新
     vault.upsertGroup({ ...group, avatar: r.avatar })
-    sendToRenderer('store:groups', vault.getGroups())
+    emitGroups()
   })
   p2p.on('nudge', (n) => {
     sendToRenderer('msg:nudge', { from: n.from, text: n.text || '' })
@@ -636,6 +677,7 @@ function startP2P () {
 function stopP2P () {
   if (ft) { ft.stop(); ft = null }
   if (p2p) { p2p.stop(); p2p = null }
+  inFlight.clear()
 }
 
 // ---------------- 文件消息落地 ----------------
@@ -649,6 +691,19 @@ function uniquePath (p) {
 function moveFile (src, dest) {
   try { fs.renameSync(src, dest) } catch (_) { fs.copyFileSync(src, dest); try { fs.unlinkSync(src) } catch (__) {} }
 }
+
+function purgeTempImages () {
+  try {
+    const dir = os.tmpdir()
+    const now = Date.now()
+    for (const f of fs.readdirSync(dir)) {
+      if (!/^ilink-(shot|paste)-\d+\.png$/.test(f)) continue
+      const fp = path.join(dir, f)
+      try { if (now - fs.statSync(fp).mtimeMs > TEMP_IMAGE_TTL_MS) fs.unlinkSync(fp) } catch (_) {}
+    }
+  } catch (_) {}
+}
+
 // 聊天图片预览：小图(≤PREVIEW_INLINE_MAX)直接内嵌原图；大图生成缩放后的 JPEG 缩略图，避免预览丢失
 const PREVIEW_INLINE_MAX = 2 * 1024 * 1024 // 内嵌原图预览的大小上限(2MB)，超过则改用缩略图
 function imagePreviewDataUrl (fp, mime) {
@@ -679,7 +734,6 @@ function finalizeFile (info) {
     const safeName = safeFileName(info.fname, 'file-' + info.mid)
     const dest = uniquePath(path.join(dir, safeName))
     moveFile(info.tempPath, dest)
-    if (info.scope === 'group') return
     const conv = info.scope === 'room' ? info.to : info.from
     const msg = buildReceivedMsg({ ...info, fname: safeName }, dest) // 落库/展示用净化后的名，与磁盘文件名保持一致
     if (vault.unlocked) vault.appendMessage(conv, msg)
@@ -733,19 +787,19 @@ function outboxDrain (peerId) {
     }
     if (it.kind === 'roomtext') {
       // 群聊离线文本补达：上线后单发给该成员 + ACK 确认（did=it.mid，与私聊同一套确认/重发机制）
-      const currentRoom = (vault.getGroups() || []).find((g) => g.id === it.roomId)
+      const currentRoom = getGroupById(it.roomId)
       const room = currentRoom || it.room
       if (!room || (!currentRoom && !it.allowMissingRoom)) { vault.outboxRemove(peerId, it.mid); continue } // 群已删/已退群
-      if (currentRoom && !(currentRoom.members || []).includes(peerId) && !it.allowNonMember) { vault.outboxRemove(peerId, it.mid); continue }
+      if (currentRoom && !isGroupMember(currentRoom, peerId) && !it.allowNonMember) { vault.outboxRemove(peerId, it.mid); continue }
       inFlight.add(it.mid)
       const r = p2p.sendRoomMember(peerId, room, it.msgMid, it.mid, it.text, it.opts)
       if (!r || !r.ok) inFlight.delete(it.mid)
     } else if (it.kind === 'roomfile') {
       // 群聊离线文件补达：用 did(it.mid) 作 TCP 传输 mid（每成员唯一，避免同文件多成员串号），复用私聊文件确认路径
-      const currentRoom = (vault.getGroups() || []).find((g) => g.id === it.roomId)
+      const currentRoom = getGroupById(it.roomId)
       const room = currentRoom || it.room
       if (!room || (!currentRoom && !it.allowMissingRoom)) { vault.outboxRemove(peerId, it.mid); continue }
-      if (currentRoom && !(currentRoom.members || []).includes(peerId) && !it.allowNonMember) { vault.outboxRemove(peerId, it.mid); continue }
+      if (currentRoom && !isGroupMember(currentRoom, peerId) && !it.allowNonMember) { vault.outboxRemove(peerId, it.mid); continue }
       if (!fs.existsSync(it.path)) { vault.outboxRemove(peerId, it.mid); continue }
       inFlight.add(it.mid)
       const r = ft.sendFile(peerId, it.path, 'room', it.mid, it.roomId, it.batch || null, !!it.sticker, it.msgMid, it.ts)
@@ -774,14 +828,14 @@ function roomDeliverySnapshot (room) {
     id: room.id,
     name: room.name || '群聊',
     ownerId: room.ownerId || '',
-    members: Array.from(new Set(room.members || [])).filter(Boolean),
+    members: Array.from(new Set(groupMembers(room))).filter(Boolean),
   }
 }
 
 function roomDeliveryTargets (room, opts) {
-  const ids = new Set((room && room.members) || [])
+  const ids = new Set(groupMembers(room))
   for (const id of ((opts && opts.extraRecipients) || [])) ids.add(id)
-  if (p2p && p2p.id) ids.delete(p2p.id)
+  ids.delete(selfId())
   return Array.from(ids).filter(Boolean)
 }
 
@@ -853,7 +907,6 @@ function defaultSpaceRoot (groupId, spaceId) {
   const safeSpace = String(spaceId || 'space').replace(/[\\/:*?"<>|]/g, '_')
   return path.join(shareDataRoot(), safeGroup, safeSpace)
 }
-function selfId () { return vault && vault.unlocked ? vault.getIdentity().id : (p2p ? p2p.id : '') }
 function selfDeviceId () { try { return os.hostname() } catch (_) { return 'device' } }
 
 // 解锁/启动后加载本机宿主空间
@@ -882,11 +935,11 @@ function shareCanDeleteSpace (sp, operatorId) {
   return operatorId === sp.createdBy
 }
 function shareGroup (sp) {
-  return sp && vault ? vault.getGroups().find((g) => g.id === sp.groupId) : null
+  return sp ? getGroupById(sp.groupId) : null
 }
 function shareIsGroupMember (sp, operatorId) {
   const group = shareGroup(sp)
-  return !!(group && (group.members || []).includes(operatorId))
+  return isGroupMember(group, operatorId)
 }
 function safeShareRelativePath (rel, fallback) {
   const parts = String(rel || '').split(/[\\/]+/).filter(Boolean).map((part) => safeFileName(part, 'item')).filter(Boolean)
@@ -986,8 +1039,8 @@ function onShareSignal (msg) {
   const reply = (d) => { if (p2p) p2p.sendShare(msg.from, { kind: 'res', reqId: msg.reqId, action: msg.action, data: d }) }
   if (!store) return reply({ ok: false, gone: true, error: '群文件不存在或已被删除' })
   const sp = vault.getShareSpace(data.spaceId)
-  const group = vault.getGroups().find((g) => g.id === (sp && sp.groupId))
-  if (!group || !(group.members || []).includes(msg.from)) return reply({ ok: false, error: '非群成员，无权访问' })
+  const group = shareGroup(sp)
+  if (!isGroupMember(group, msg.from)) return reply({ ok: false, error: '非群成员，无权访问' })
   try {
     if (msg.action === 'space_info') return reply({ ok: true, info: store.spaceInfo() })
     if (msg.action === 'dir_list') return reply(store.listDir(data.parentId))
@@ -1040,12 +1093,12 @@ function persistHostSpace (sp) {
 // op: '' 目录变更(失效缓存并刷新) / 'deleted' 群文件已删除(成员本地移除该空间)
 function notifyShareSync (sp, op) {
   if (!p2p || !sp) return
-  const group = vault.getGroups().find((g) => g.id === sp.groupId)
+  const group = shareGroup(sp)
   if (!group) return
   const store = shareHosts.get(sp.spaceId)
   const info = store ? store.spaceInfo() : null // 随同步带上最新文件数/更新时间，成员据此更新列表
   const reqId = crypto.randomUUID() // 同一次变更复用一个 reqId，接收端按 reqId 去重避免重复刷新
-  for (const id of (group.members || [])) {
+  for (const id of groupMembers(group)) {
     if (id === selfId()) continue
     p2p.sendShare(id, { kind: 'sync', reqId, spaceId: sp.spaceId, op: op || '', fileCount: info ? info.fileCount : undefined, updatedAt: info ? info.updatedAt : undefined })
   }
@@ -1113,7 +1166,7 @@ async function onShareFileDone (info) {
 // 按需求：仅「创建群文件」广播到群聊，其余操作不再广播。
 function broadcastShare (sp, system, text, payload) {
   if (system !== 'share-space-created') return // 仅“创建群文件”在聊天框广播；上传/新建/重命名/删除等不发群消息
-  const group = vault.getGroups().find((g) => g.id === sp.groupId)
+  const group = shareGroup(sp)
   if (!group) return
   sendRoomStored(group, text, { system, share: { ...(payload || {}), spaceId: sp.spaceId, groupId: sp.groupId, name: sp.name, hostUserId: sp.hostUserId, hostDeviceId: sp.hostDeviceId, createdBy: sp.createdBy, createdAt: sp.createdAt } }, true)
 }
@@ -1178,10 +1231,10 @@ function sendFilesInternal (scope, toId, paths, batch, opts) {
 
   if (scope === 'room') {
     // 群聊：所有成员入持久化发件箱；在线成员立即发送，假在线/离线成员上线后补达。
-    const room = vault.getGroups().find((g) => g.id === toId) || null
+    const room = getGroupById(toId)
     if (!room) return []
-    const selfId = p2p.id
-    const targets = (room.members || []).filter((id) => id !== selfId)
+    const ownId = selfId()
+    const targets = groupMembers(room).filter((id) => id !== ownId)
     const online = new Set(p2p.getPeers().filter((p) => p.online && p.pub).map((p) => p.id))
     const snapshot = roomDeliverySnapshot(room)
     for (const fp of (paths || [])) {
@@ -1195,7 +1248,7 @@ function sendFilesInternal (scope, toId, paths, batch, opts) {
       // 所有群成员都入发件箱：在线成员立即 drain，假在线/离线成员上线后继续补发。
       for (const mem of targets) vault.outboxAdd(mem, { mid: mid + '@' + mem, kind: 'roomfile', msgMid: mid, roomId: toId, room: snapshot, path: fp, fname, size, mime, batch: batch || null, sticker, ts })
       logger.log('file', 'send', { mid, fname, size, to: toId, scope, recipients: targets.filter((id) => online.has(id)).length, queued: targets.length })
-      const msg = { mid, type: 'file', from: p2p.id, name: p2p.name, fname, size, mime, scope, to: toId, batch: batch || null, sticker, path: fp, ts, self: true, status: null }
+      const msg = { mid, type: 'file', from: selfId(), name: p2p.name, fname, size, mime, scope, to: toId, batch: batch || null, sticker, path: fp, ts, self: true, status: null }
       const preview = imagePreviewDataUrl(fp, mime); if (preview) msg.dataUrl = preview
       vault.appendMessage(toId, msg)
       out.push(msg)
@@ -1215,7 +1268,7 @@ function sendFilesInternal (scope, toId, paths, batch, opts) {
     const fname = path.basename(fp)
     const mime = guessMime(fname)
     const online = p2p.reachable(toId)
-    const msg = { mid, type: 'file', from: p2p.id, name: p2p.name, fname, size, mime, scope: 'private', to: toId, batch: batch || null, sticker, path: fp, ts: Date.now(), self: true, status: online ? 'sending' : 'queued' }
+    const msg = { mid, type: 'file', from: selfId(), name: p2p.name, fname, size, mime, scope: 'private', to: toId, batch: batch || null, sticker, path: fp, ts: Date.now(), self: true, status: online ? 'sending' : 'queued' }
     const preview = imagePreviewDataUrl(fp, mime); if (preview) msg.dataUrl = preview
     vault.appendMessage(toId, msg)
     vault.outboxAdd(toId, { mid, kind: 'file', path: fp, fname, size, mime, batch: batch || null, sticker, ts: msg.ts })
@@ -1322,7 +1375,7 @@ ipcMain.handle('ui:attention', (e, opts) => {
 
 ipcMain.handle('p2p:typing', (_e, toId) => {
   if (!p2p) return
-  const room = vault && vault.unlocked ? (vault.getGroups() || []).find((g) => g.id === toId) : null
+  const room = getGroupById(toId)
   if (room) p2p.sendTypingRoom(room)
   else p2p.sendTyping(toId)
 })
@@ -1343,15 +1396,15 @@ ipcMain.handle('msg:recall', (_e, scope, toId, mid) => {
 ipcMain.handle('msg:react', (_e, scope, toId, mid, emoji) => {
   if (!p2p) return { ok: false }
   const conv = toId
-  if (vault && vault.unlocked) vault.addReaction(conv, mid, emoji, p2p.id)
+  if (vault && vault.unlocked) vault.addReaction(conv, mid, emoji, selfId())
   p2p.sendReaction(scope, toId, mid, emoji)
   return { ok: true }
 })
 ipcMain.handle('msg:pin', (_e, groupId, message) => {
   if (!p2p || !vault || !vault.unlocked) return { ok: false, error: '应用尚未就绪' }
-  const group = vault.getGroups().find((g) => g.id === groupId)
-  if (!group) return { ok: false, error: '群聊不存在' }
-  if (!canUseGroupPinnedMessages(group, p2p.id)) return { ok: false, error: '你不是群成员，不能置顶消息' }
+  const guard = requireGroupMember(groupId, selfId(), '群聊不存在', '你不是群成员，不能置顶消息')
+  if (!guard.ok) return guard
+  const group = guard.group
   const mid = message && message.mid
   if (!mid) return { ok: false, error: '消息不存在' }
   const stored = ((vault.getHistory() || {})[groupId] || []).find((m) => m && m.mid === mid)
@@ -1371,7 +1424,7 @@ ipcMain.handle('msg:pin', (_e, groupId, message) => {
     senderName: snapshot.senderName,
     messageType: snapshot.messageType,
     contentPreview: snapshot.contentPreview,
-    pinnedBy: p2p.id,
+    pinnedBy: selfId(),
     pinnedByName: currentDisplayName(),
     pinnedAt: now,
     status: 'pinned',
@@ -1386,10 +1439,10 @@ ipcMain.handle('msg:pin', (_e, groupId, message) => {
 })
 ipcMain.handle('msg:unpin', (_e, groupId, pinId) => {
   if (!p2p || !vault || !vault.unlocked) return { ok: false, error: '应用尚未就绪' }
-  const group = vault.getGroups().find((g) => g.id === groupId)
-  if (!group) return { ok: false, error: '群聊不存在' }
-  if (!canUseGroupPinnedMessages(group, p2p.id)) return { ok: false, error: '你不是群成员，不能取消置顶' }
-  const res = vault.unpinMessage(groupId, pinId, p2p.id, currentDisplayName())
+  const guard = requireGroupMember(groupId, selfId(), '群聊不存在', '你不是群成员，不能取消置顶')
+  if (!guard.ok) return guard
+  const group = guard.group
+  const res = vault.unpinMessage(groupId, pinId, selfId(), currentDisplayName())
   if (!res || !res.ok) return { ok: false, error: (res && res.error) || '取消置顶失败' }
   emitPinnedMessages()
   sendToRenderer('msg:unpinned', res.pin)
@@ -1426,12 +1479,12 @@ ipcMain.handle('store:getPinnedMessages', (_e, groupId) => {
 })
 ipcMain.handle('store:createGroup', (_e, name, members) => {
   if (!vault || !vault.unlocked) return null
-  const selfId = vault.getIdentity().id
-  const group = vault.createGroup(name || '群聊', Array.from(new Set([selfId, ...(members || [])])), selfId)
+  const ownId = selfId()
+  const group = vault.createGroup(name || '群聊', Array.from(new Set([ownId, ...(members || [])])), ownId)
   if (p2p) {
     sendRoomStored(group, '群聊已创建', { system: 'room-created' }, true)
   }
-  sendToRenderer('store:groups', vault.getGroups())
+  emitGroups()
   return group
 })
 function displayNameForId (id) {
@@ -1477,8 +1530,7 @@ function messageMentionsSelf (m) {
 }
 
 function canUseGroupPinnedMessages (group, userId) {
-  if (!group || !userId) return false
-  return Array.isArray(group.members) && group.members.includes(userId)
+  return isGroupMember(group, userId)
 }
 
 function pinnedMessageTypeOf (m) {
@@ -1562,7 +1614,7 @@ function emitPinnedMessages () {
 
 function applyPinnedRoomEvent (m) {
   if (!m || !m.room || !m.pin || !vault || !vault.unlocked || !p2p) return
-  if (!canUseGroupPinnedMessages(m.room, p2p.id) || !canUseGroupPinnedMessages(m.room, m.from)) return
+  if (!canUseGroupPinnedMessages(m.room, selfId()) || !canUseGroupPinnedMessages(m.room, m.from)) return
   const event = m.pin.event || m.system
   const record = m.pin.record || m.pin.pin || null
   if (!record || !record.pinId || !record.groupId) return
@@ -1577,7 +1629,7 @@ function applyPinnedRoomEvent (m) {
 function pinnedGroupIdsForPeer (peerId) {
   if (!vault || !vault.unlocked || !p2p || !peerId) return []
   return (vault.getGroups() || [])
-    .filter((g) => canUseGroupPinnedMessages(g, p2p.id) && canUseGroupPinnedMessages(g, peerId))
+    .filter((g) => canUseGroupPinnedMessages(g, selfId()) && canUseGroupPinnedMessages(g, peerId))
     .map((g) => g.id)
 }
 
@@ -1620,36 +1672,34 @@ function onPinnedSignal (msg) {
 
 ipcMain.handle('store:addGroupMembers', (_e, groupId, memberIds) => {
   if (!vault || !vault.unlocked || !p2p) return { ok: false, error: '应用尚未就绪' }
-  const group = vault.getGroups().find((g) => g.id === groupId)
-  if (!group) return { ok: false, error: '群聊不存在' }
-  const selfId = vault.getIdentity().id
-  if (!(group.members || []).includes(selfId)) return { ok: false, error: '你不是群成员，不能添加成员' }
+  const guard = requireGroupMember(groupId, selfId(), '群聊不存在', '你不是群成员，不能添加成员')
+  if (!guard.ok) return guard
+  const group = guard.group
   const known = new Set(mergedPeers().map((p) => p.id))
   const incoming = Array.from(new Set((memberIds || []).map((id) => String(id || '').trim()).filter(Boolean)))
   const missing = incoming.filter((id) => !known.has(id))
   if (missing.length) return { ok: false, error: '用户不存在: ' + missing.map(displayNameForId).join(', ') }
-  const existing = new Set(group.members || [])
+  const existing = new Set(groupMembers(group))
   const added = incoming.filter((id) => !existing.has(id))
   if (!added.length) return { ok: false, error: '成员已在群聊中' }
-  const updated = vault.upsertGroup({ ...group, members: [...(group.members || []), ...added] })
+  const updated = vault.upsertGroup({ ...group, members: [...groupMembers(group), ...added] })
   const text = added.map(displayNameForId).join(', ') + ' 加入了群聊'
   sendRoomStored(updated, text, { system: 'member-added' }, true)
-  sendToRenderer('store:groups', vault.getGroups())
+  emitGroups()
   return { ok: true, group: updated, added }
 })
 ipcMain.handle('store:removeGroupMember', (_e, groupId, memberId) => {
   if (!vault || !vault.unlocked || !p2p) return { ok: false, error: '应用尚未就绪' }
-  const group = vault.getGroups().find((g) => g.id === groupId)
-  if (!group) return { ok: false, error: '群聊不存在' }
-  const selfId = vault.getIdentity().id
-  if (group.ownerId !== selfId) return { ok: false, error: '只有群主可以移出成员' }
+  const guard = requireGroupOwner(groupId, selfId(), '群聊不存在', '只有群主可以移出成员')
+  if (!guard.ok) return guard
+  const group = guard.group
   memberId = String(memberId || '').trim()
-  if (!memberId || !(group.members || []).includes(memberId)) return { ok: false, error: '成员不存在' }
+  if (!memberId || !isGroupMember(group, memberId)) return { ok: false, error: '成员不存在' }
   if (memberId === group.ownerId) return { ok: false, error: '不能移出群主' }
-  const updated = vault.upsertGroup({ ...group, members: (group.members || []).filter((id) => id !== memberId) })
+  const updated = vault.upsertGroup({ ...group, members: groupMembers(group).filter((id) => id !== memberId) })
   const text = displayNameForId(memberId) + ' 已被群主移出群聊'
   sendRoomStored(updated, text, { system: 'member-removed', extraRecipients: [memberId] }, true)
-  sendToRenderer('store:groups', vault.getGroups())
+  emitGroups()
   return { ok: true, group: updated, removed: memberId }
 })
 // 群头像载入：选图后输出 96px 压缩 JPEG，小图直接保留，过大才重压缩；失败返回 null 而非空壳对象
@@ -1673,43 +1723,42 @@ function groupAvatarPayload (avatar) {
 // 修改群头像，仅群主可操作；头像同步给成员
 ipcMain.handle('store:setGroupAvatar', (_e, groupId, avatar) => {
   if (!vault || !vault.unlocked || !p2p) return null
-  const group = vault.getGroups().find((g) => g.id === groupId)
-  if (!group) return null
-  if (group.ownerId !== vault.getIdentity().id) return null
+  const guard = requireGroupOwner(groupId, selfId())
+  if (!guard.ok) return null
+  const group = guard.group
   const pub = avatar ? groupAvatarPayload(avatar) : null
   if (avatar && !pub) return null // 图片处理失败，不落空壳头像
   const next = vault.upsertGroup({ ...group, avatar: pub })
   p2p.sendRoomAvatar(next, pub)
   sendRoomStored(next, '更新了群头像', { system: 'avatar-changed' }, true)
-  sendToRenderer('store:groups', vault.getGroups())
+  emitGroups()
   return next
 })
 // 退出群聊：通知其他成员（带更新后的成员表）；群主退出时自动移交给第一位成员，本地删除群记录
 ipcMain.handle('store:leaveGroup', (_e, groupId) => {
   if (!vault || !vault.unlocked) return { ok: false }
-  const group = vault.getGroups().find((g) => g.id === groupId)
+  const group = getGroupById(groupId)
   if (!group) return { ok: false }
-  const selfId = vault.getIdentity().id
-  const rest = (group.members || []).filter((id) => id !== selfId)
+  const ownId = selfId()
+  const rest = groupMembers(group).filter((id) => id !== ownId)
   if (p2p && rest.length) {
-    const updated = { ...group, members: rest, ownerId: group.ownerId === selfId ? rest[0] : group.ownerId }
+    const updated = { ...group, members: rest, ownerId: group.ownerId === ownId ? rest[0] : group.ownerId }
     sendRoomStored(updated, '退出了群聊', { system: 'member-left' }, false)
   }
   removeLocalGroupData(groupId)
-  sendToRenderer('store:groups', vault.getGroups())
+  emitGroups()
   sendToRenderer('share:changed', { groupId })
   return { ok: true }
 })
 ipcMain.handle('store:dismissGroup', (_e, groupId) => {
   if (!vault || !vault.unlocked || !p2p) return { ok: false, error: '应用尚未就绪' }
-  const group = vault.getGroups().find((g) => g.id === groupId)
-  if (!group) return { ok: false, error: '群聊不存在' }
-  const ownId = vault.getIdentity().id
-  if (group.ownerId !== ownId) return { ok: false, error: '只有群主可以解散群聊' }
+  const guard = requireGroupOwner(groupId, selfId(), '群聊不存在', '只有群主可以解散群聊')
+  if (!guard.ok) return guard
+  const group = guard.group
   const res = sendRoomStored(group, '群聊已解散', { system: 'group-dismissed' }, false)
   if (!res || !res.ok) return res || { ok: false, error: '解散群聊失败' }
   removeLocalGroupData(groupId)
-  sendToRenderer('store:groups', vault.getGroups())
+  emitGroups()
   sendToRenderer('share:changed', { groupId })
   return { ok: true }
 })
@@ -1717,20 +1766,20 @@ ipcMain.handle('store:transferGroupOwner', (_e, groupId, ownerId) => {
   // 权限校验在主进程 + 领域层双重落实（前端限制不是安全边界）：
   // 仅现群主可转让；群须存在且本人仍是群主；新群主须为群成员且不能是现群主本人。
   if (!vault || !vault.unlocked) return { ok: false, error: '应用尚未就绪' }
-  const selfId = vault.getIdentity().id
-  const group = vault.getGroups().find((g) => g.id === groupId)
-  if (!group) return { ok: false, error: '群聊不存在或已解散' }
-  if (group.ownerId !== selfId) return { ok: false, error: '仅群主可转让群主权限' }
+  const ownId = selfId()
+  const guard = requireGroupOwner(groupId, ownId, '群聊不存在或已解散', '仅群主可转让群主权限')
+  if (!guard.ok) return guard
+  const group = guard.group
   ownerId = String(ownerId || '').trim()
-  if (!ownerId || !(group.members || []).includes(ownerId)) return { ok: false, error: '新群主必须是当前群成员' }
+  if (!ownerId || !isGroupMember(group, ownerId)) return { ok: false, error: '新群主必须是当前群成员' }
   if (ownerId === group.ownerId) return { ok: false, error: '不能将群主转让给当前群主本人' }
-  const updated = vault.transferGroupOwner(groupId, ownerId, selfId)
+  const updated = vault.transferGroupOwner(groupId, ownerId, ownId)
   if (!updated) return { ok: false, error: '转让失败' }
   if (p2p) {
     const name = (mergedPeers().find((p) => p.id === ownerId) || {}).name || '新群主'
     sendRoomStored(updated, '群主已转让给 ' + name, { system: 'owner-transferred' }, true)
   }
-  sendToRenderer('store:groups', vault.getGroups())
+  emitGroups()
   return { ok: true, group: updated }
 })
 // ---------------- 群共享空间 IPC ----------------
@@ -1768,9 +1817,8 @@ ipcMain.handle('share:pickFolder', async () => {
 })
 ipcMain.handle('share:create', (_e, groupId, name, dir) => {
   if (!vault || !vault.unlocked || !p2p) return { ok: false, error: '应用未就绪' }
-  const group = vault.getGroups().find((g) => g.id === groupId)
-  if (!group) return { ok: false, error: '群聊不存在' }
-  if (!(group.members || []).includes(selfId())) return { ok: false, error: '你不是群成员' }
+  const guard = requireGroupMember(groupId, selfId(), '群聊不存在', '你不是群成员')
+  if (!guard.ok) return guard
   name = String(name || '').trim().slice(0, 60) || '共享空间'
   const spaceId = 'space:' + crypto.randomUUID()
   const rootPath = dir ? path.join(dir, String(spaceId).replace(/[\\/:*?"<>|]/g, '_')) : defaultSpaceRoot(groupId, spaceId)
@@ -1831,8 +1879,8 @@ ipcMain.handle('share:search', async (_e, groupId, query, spaceId) => {
   if (!vault || !vault.unlocked) return { ok: false, error: '未就绪' }
   const q = String(query || '').trim()
   if (!q) return { ok: true, results: [] }
-  const group = vault.getGroups().find((g) => g.id === groupId)
-  if (!group || !(group.members || []).includes(selfId())) return { ok: false, error: '你不是群成员' }
+  const guard = requireGroupMember(groupId, selfId(), '你不是群成员', '你不是群成员')
+  if (!guard.ok) return guard
   const spaces = (spaceId ? [vault.getShareSpace(spaceId)] : vault.getShareSpacesByGroup(groupId))
     .filter((sp) => sp && sp.groupId === groupId)
   const results = []
@@ -2046,9 +2094,9 @@ ipcMain.handle('p2p:setName', (_e, name) => {
 })
 ipcMain.handle('p2p:sendRoom', (_e, roomId, text, opts) => {
   if (!p2p || !vault || !vault.unlocked) return { ok: false, error: '网络未就绪' }
-  const room = vault.getGroups().find((g) => g.id === roomId)
-  if (!room) return { ok: false, error: '群聊不存在' }
-  if (!(room.members || []).includes(p2p.id)) return { ok: false, error: '你不是群成员' }
+  const guard = requireGroupMember(roomId, selfId(), '群聊不存在', '你不是群成员')
+  if (!guard.ok) return guard
+  const room = guard.group
   return sendRoomStored(room, text, opts, false)
 })
 ipcMain.handle('p2p:sendPrivate', (_e, toId, text, opts) => {
@@ -2312,6 +2360,7 @@ ipcMain.handle('stickers:remove', (_e, id) => {
 app.whenReady().then(() => {
   vault = new Vault(resolveDataDir())
   logger.init(resolveDataDir())
+  purgeTempImages()
   setupTray()
   createWindow()
 
@@ -2326,5 +2375,3 @@ app.on('window-all-closed', () => {
   stopP2P()
   app.quit()
 })
-
-// padding: workspace mount sync lags one write behind; this trailing comment absorbs the truncation so real code stays intact when verified from the sandbox. -------------------------------------------------------------------------------------------------------------------------

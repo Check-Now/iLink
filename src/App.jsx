@@ -2180,12 +2180,36 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
   const lastTypingRef = useRef(0)
   const toastSeq = useRef(0)
   const noticeTimerRef = useRef(null)
+  const timersRef = useRef(new Set())
+
+  function setManagedTimeout (fn, delay) {
+    const id = setTimeout(() => {
+      timersRef.current.delete(id)
+      fn()
+    }, delay)
+    timersRef.current.add(id)
+    return id
+  }
+
+  function clearManagedTimeout (id) {
+    if (!id) return
+    clearTimeout(id)
+    timersRef.current.delete(id)
+  }
+
+  useEffect(() => () => {
+    for (const id of timersRef.current) clearTimeout(id)
+    timersRef.current.clear()
+  }, [])
 
   // 聊天框内的轻量提示，如文件发送错误，5 秒后自动消失
   function showChatNotice (msg) {
     setChatNotice(msg)
-    if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current)
-    noticeTimerRef.current = setTimeout(() => setChatNotice(null), 5000)
+    if (noticeTimerRef.current) clearManagedTimeout(noticeTimerRef.current)
+    noticeTimerRef.current = setManagedTimeout(() => {
+      noticeTimerRef.current = null
+      setChatNotice(null)
+    }, 5000)
   }
 
   useEffect(() => {
@@ -2244,7 +2268,7 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
       api.msg.onStatus ? api.msg.onStatus(({ mid, toId, status }) => updateMsgStatus(toId, mid, status)) : () => {},
       api.msg.onNudge(({ from, text }) => {
         if ((mutedRef.current || []).includes(from)) return
-        setShake(true); setTimeout(() => setShake(false), 500)
+        setShake(true); setManagedTimeout(() => setShake(false), 500)
         const who = displayNameForId(from, '有人')
         const body = (text && text.trim()) ? text : '戳了你一下 👋'
         pushMsg(from, { mid: 'nudge-' + Date.now() + '-' + String(from).slice(0, 4), system: true, text: who + ' ' + body, ts: Date.now() })
@@ -2407,10 +2431,10 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
   // 柔和移除：先播放滑出动画，再从列表删除
   function removeToastSoft (id) {
     setToasts((prev) => prev.map((x) => (x.id === id ? { ...x, leaving: true } : x)))
-    setTimeout(() => setToasts((prev) => prev.filter((x) => x.id !== id)), 320)
+    setManagedTimeout(() => setToasts((prev) => prev.filter((x) => x.id !== id)), 320)
   }
   function scheduleToastExpiry (id, delay = 4200) {
-    setTimeout(() => removeToastSoft(id), delay)
+    setManagedTimeout(() => removeToastSoft(id), delay)
   }
   function addToast (t) {
     if ((settingsRef.current.presence || 'online') === 'dnd') return // 全局免打扰：不弹应用内消息通知
@@ -2634,7 +2658,9 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
     if (!paths || !paths.length) return
     const t = fileSendTarget()
     if (t.error) { showChatNotice(t.error); return }
-    api.file.send(t.scope, t.toId, paths, batch || null, opts || null).then((out) => { (out || []).forEach((msg) => pushMsg(activeRef.current, msg)) })
+    api.file.send(t.scope, t.toId, paths, batch || null, opts || null)
+      .then((out) => { (out || []).forEach((msg) => pushMsg(activeRef.current, msg)) })
+      .catch(() => showChatNotice('文件发送失败'))
   }
   function openSharedEntry (share) {
     if (!share || share.type !== 'share-entry' || !share.spaceId) return
@@ -2852,7 +2878,7 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
           if (res && res.ok) pushMsg(targetConv, res.msg)
         }
       }
-    })()
+    })().catch(() => showChatNotice('转发失败'))
     setSelectMode(false); setSelected({}); setForwardOpen(false)
   }
   // 字体面板：聊天字号滑块跟随设置，仅作用于聊天框，不影响全局
@@ -4212,5 +4238,3 @@ export default function App () {
 
   return <div className="app-bg txt h-full"><div className="app-shell">{screen}</div></div>
 }
-
-// padding: workspace mount sync lags one write behind; this trailing comment absorbs the truncation so real code stays intact when verified from the sandbox. -------------------------------------------------------------------------------------------------------------------------
