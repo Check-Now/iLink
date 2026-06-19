@@ -10,6 +10,9 @@ const { Vault, PINNED_MESSAGE_CAP } = require('./vault')
 const { FileTransfer, guessMime } = require('./filetransfer')
 const { safeFileName } = require('./pathutil')
 const shareMod = require('./sharespace')
+const shareHost = require('./sharespace-host')
+const { OutboxController } = require('./outbox')
+const { pinnedMessageTypeOf, pinnedContentPreview, publicPinnedRecord, publicPinnedGroups } = require('./pinned')
 const { baseAvatar, avatarCrop, AVATAR_MAX_CHARS } = require('./avatarutil')
 const { Logger } = require('./logger')
 const logger = new Logger()
@@ -90,6 +93,16 @@ function sendToRenderer (channel, payload) {
     if (win && !win.isDestroyed()) win.webContents.send(channel, payload)
   }
 }
+
+const outbox = new OutboxController({
+  getVault: () => vault,
+  getP2P: () => p2p,
+  getFileTransfer: () => ft,
+  getGroupById: (groupId) => getGroupById(groupId),
+  isGroupMember: (group, userId) => isGroupMember(group, userId),
+  sendToRenderer,
+  logger,
+})
 
 function windowFromEvent (event) {
   return event && event.sender ? BrowserWindow.fromWebContents(event.sender) : null
@@ -528,11 +541,11 @@ function startP2P () {
     if (vault && vault.unlocked) vault.upsertContacts((list || []).filter((p) => p.id))
     logPeerTransitions(list || [])
     emitPeers()
-    outboxDrainAll() // 任一对端可达即尝试补发其发件箱（修复"恢复早于离线判定"导致不补发）
+    outbox.drainAll() // 任一对端可达即尝试补发其发件箱（修复"恢复早于离线判定"导致不补发）
     requestPinnedListsFromPeers(list || [])
   })
   p2p.on('presence', (peer) => {
-    if (peer && peer.id) outboxDrain(peer.id)
+    if (peer && peer.id) outbox.drain(peer.id)
     if (peer && peer.id) requestPinnedListFromPeer(peer.id)
   })
   p2p.on('message', (m) => {
@@ -588,7 +601,7 @@ function startP2P () {
     sendToRenderer('msg:recall', { conv, mid: r.mid })
   })
   // 对端确认收到撤回 → 从发件箱移除该撤回信号，停止补发
-  p2p.on('recall-ack', (r) => { if (vault && vault.unlocked) { vault.outboxRemove(r.from, '__recall__' + r.mid); recallAttempts.delete('__recall__' + r.mid) } })
+  p2p.on('recall-ack', (r) => outbox.onRecallAck(r.from, r.mid))
   p2p.on('reaction', (r) => {
     const conv = r.scope === 'room' && r.roomId ? r.roomId : r.from
     if (vault && vault.unlocked) vault.addReaction(conv, r.mid, r.emoji, r.from)
@@ -598,7 +611,7 @@ function startP2P () {
   p2p.on('msg-status', (s) => {
     if (!vault || !vault.unlocked || !s.toId) { sendToRenderer('msg:status', s); return }
     if (s.status === 'delivered') {
-      inFlight.delete(s.mid)
+      outbox.deleteInFlight(s.mid)
       vault.outboxRemove(s.toId, s.mid)
       vault.setMessageStatus(s.toId, s.mid, 'delivered')
       sendToRenderer('msg:status', s)
@@ -606,7 +619,7 @@ function startP2P () {
       vault.setMessageStatus(s.toId, s.mid, 'sent')
       sendToRenderer('msg:status', s)
     } else { // failed
-      inFlight.delete(s.mid)
+      outbox.deleteInFlight(s.mid)
       const queued = (vault.getOutbox()[s.toId] || []).some((x) => x.mid === s.mid)
       const st = queued ? 'queued' : 'failed'
       if (!queued) logger.log('msg', 'failed', { mid: s.mid, to: s.toId })
@@ -643,25 +656,20 @@ function startP2P () {
   ft.on('progress', (p) => { sendToRenderer('file:progress', { mid: p.mid, received: p.received, size: p.size, dir: 'in' }); if (shareXferMids.has(p.mid)) sendToRenderer('share:progress', { mid: p.mid, received: p.received, size: p.size, dir: 'in' }) })
   ft.on('send-progress', (p) => { sendToRenderer('file:progress', { mid: p.mid, received: p.sent, size: p.size, dir: 'out' }); if (shareXferMids.has(p.mid)) sendToRenderer('share:progress', { mid: p.mid, received: p.sent, size: p.size, dir: 'out' }) })
   ft.on('sent', (p) => {
-    inFlight.delete(p && p.mid)
+    outbox.onFileSent(p)
     if (p) shareXferMids.delete(p.mid)
-    // 文件经 TCP 送达 → 移出发件箱、标记已送达（仅当确为发件箱条目）
-    if (vault && vault.unlocked && p && p.toId && (vault.getOutbox()[p.toId] || []).some((x) => x.mid === p.mid)) {
-      vault.outboxRemove(p.toId, p.mid)
-      vault.setMessageStatus(p.toId, p.mid, 'sent')
-    }
     sendToRenderer('file:sent', p)
   })
   ft.on('failed', (p) => {
-    inFlight.delete(p && p.mid)
+    outbox.deleteInFlight(p && p.mid)
     if (p) shareXferMids.delete(p.mid)
-    const pending = p && p.mid ? findOutboxItem(p.mid) : null
+    const pending = p && p.mid ? outbox.findItem(p.mid) : null
     // 用户取消 → 移出发件箱不再补发；其他失败 → 留在发件箱，下次 presence 续传(断点续传)
     if (vault && vault.unlocked && p && p.canceled && p.mid) {
       const ob = vault.getOutbox()
       for (const pid of Object.keys(ob)) { if (ob[pid].some((x) => x.mid === p.mid)) { vault.outboxRemove(pid, p.mid); break } }
     } else if (pending) {
-      if (pending.item.kind === 'file') setMsgStatusOut(pending.peerId, p.mid, 'queued')
+      if (pending.item.kind === 'file') outbox.setMsgStatusOut(pending.peerId, p.mid, 'queued')
       sendToRenderer('file:failed', { ...p, queued: true })
       logger.log('file', 'queued', { mid: p.mid, to: pending.peerId })
       return
@@ -677,7 +685,7 @@ function startP2P () {
 function stopP2P () {
   if (ft) { ft.stop(); ft = null }
   if (p2p) { p2p.stop(); p2p = null }
-  inFlight.clear()
+  outbox.clearInFlight()
 }
 
 // ---------------- 文件消息落地 ----------------
@@ -753,75 +761,6 @@ function onFileDone (info) {
     sendToRenderer('file:offer', { mid: info.mid, from: info.from, name: info.name, fname: info.fname, size: info.size, mime: info.mime, scope: info.scope, to: info.to || null })
   } else { finalizeFile(info) }
 }
-// ============ 离线发件箱编排（文本 + 文件，持久化于 vault，确认送达后才移除）============
-const inFlight = new Set() // 正在发送/等待确认的 mid，避免重复发
-const recallAttempts = new Map() // 撤回信号已尽力次数（无 recallack 的旧端兜底封顶）
-
-function setMsgStatusOut (conv, mid, status) {
-  if (vault && vault.unlocked) vault.setMessageStatus(conv, mid, status)
-  sendToRenderer('msg:status', { mid, toId: conv, status })
-}
-
-function findOutboxItem (mid) {
-  if (!vault || !vault.unlocked || !mid) return null
-  const ob = vault.getOutbox()
-  for (const peerId of Object.keys(ob)) {
-    const item = (ob[peerId] || []).find((x) => x.mid === mid)
-    if (item) return { peerId, item }
-  }
-  return null
-}
-
-// 把某对端发件箱里未在途的条目按序发出（文本走 UDP+ACK，文件走 TCP，均按 mid 去重）
-function outboxDrain (peerId) {
-  if (!p2p || !ft || !vault || !vault.unlocked || !p2p.reachable(peerId)) return
-  const items = (vault.getOutbox()[peerId] || []).slice()
-  for (const it of items) {
-    if (inFlight.has(it.mid)) continue
-    if (it.kind === 'recall') {
-      const a = recallAttempts.get(it.mid) || 0
-      if (a >= 8) { vault.outboxRemove(peerId, it.mid); recallAttempts.delete(it.mid); continue } // 旧端无 recallack 时尽力 8 次后放弃
-      recallAttempts.set(it.mid, a + 1)
-      p2p.sendRecall('private', peerId, it.targetMid) // 幂等：对端重复收到撤回无副作用；recallack 到达即移除
-      continue
-    }
-    if (it.kind === 'roomtext') {
-      // 群聊离线文本补达：上线后单发给该成员 + ACK 确认（did=it.mid，与私聊同一套确认/重发机制）
-      const currentRoom = getGroupById(it.roomId)
-      const room = currentRoom || it.room
-      if (!room || (!currentRoom && !it.allowMissingRoom)) { vault.outboxRemove(peerId, it.mid); continue } // 群已删/已退群
-      if (currentRoom && !isGroupMember(currentRoom, peerId) && !it.allowNonMember) { vault.outboxRemove(peerId, it.mid); continue }
-      inFlight.add(it.mid)
-      const r = p2p.sendRoomMember(peerId, room, it.msgMid, it.mid, it.text, it.opts)
-      if (!r || !r.ok) inFlight.delete(it.mid)
-    } else if (it.kind === 'roomfile') {
-      // 群聊离线文件补达：用 did(it.mid) 作 TCP 传输 mid（每成员唯一，避免同文件多成员串号），复用私聊文件确认路径
-      const currentRoom = getGroupById(it.roomId)
-      const room = currentRoom || it.room
-      if (!room || (!currentRoom && !it.allowMissingRoom)) { vault.outboxRemove(peerId, it.mid); continue }
-      if (currentRoom && !isGroupMember(currentRoom, peerId) && !it.allowNonMember) { vault.outboxRemove(peerId, it.mid); continue }
-      if (!fs.existsSync(it.path)) { vault.outboxRemove(peerId, it.mid); continue }
-      inFlight.add(it.mid)
-      const r = ft.sendFile(peerId, it.path, 'room', it.mid, it.roomId, it.batch || null, !!it.sticker, it.msgMid, it.ts)
-      if (r && r.error) inFlight.delete(it.mid)
-    } else if (it.kind === 'file') {
-      if (!fs.existsSync(it.path)) { vault.outboxRemove(peerId, it.mid); setMsgStatusOut(peerId, it.mid, 'failed'); continue } // 文件已不存在
-      inFlight.add(it.mid)
-      const r = ft.sendFile(peerId, it.path, 'private', it.mid, peerId, it.batch || null, !!it.sticker, it.mid, it.ts)
-      if (r && r.error) inFlight.delete(it.mid) // 对端 TCP 暂不可达 → 保留发件箱，下次再试
-    } else {
-      inFlight.add(it.mid)
-      const r = p2p.resendPrivate(peerId, it.mid, it.text, it.opts)
-      if (!r || !r.ok) inFlight.delete(it.mid) // 暂不可达 → 保留，下次 presence 再试
-    }
-  }
-}
-
-function outboxDrainAll () {
-  if (!vault || !vault.unlocked) return
-  for (const pid of Object.keys(vault.getOutbox())) outboxDrain(pid)
-}
-
 function roomDeliverySnapshot (room) {
   if (!room || !room.id) return null
   return {
@@ -870,7 +809,7 @@ function sendRoomStored (room, text, opts, emitLocal) {
   if (res.ok && !res.msg.burn) {
     vault.appendMessage(room.id, res.msg)
     queueRoomTextDeliveries(room, res.msg, text, o)
-    outboxDrainAll()
+    outbox.drainAll()
     res.queued = queuedCount > 0
     res.queuedCount = queuedCount
   }
@@ -921,12 +860,9 @@ function loadShareHosts () {
 
 // 空间在线 = 本机是宿主 或 宿主对端在线
 function isSpaceOnline (sp) {
-  if (!sp) return false
-  if (sp.hostUserId === selfId()) return true
-  const peer = (p2p ? p2p.getPeers() : []).find((p) => p.id === sp.hostUserId)
-  return !!(peer && peer.online)
+  return shareHost.isSpaceOnline(sp, selfId(), p2p ? p2p.getPeers() : [])
 }
-function shareSpaceView (sp) { return { ...sp, online: isSpaceOnline(sp) } }
+function shareSpaceView (sp) { return shareHost.shareSpaceView(sp, selfId(), p2p ? p2p.getPeers() : []) }
 function isHostSelf (sp) { return sp && sp.hostUserId === selfId() }
 
 // 群空间删除权限：仅空间创建者。
@@ -942,8 +878,7 @@ function shareIsGroupMember (sp, operatorId) {
   return isGroupMember(group, operatorId)
 }
 function safeShareRelativePath (rel, fallback) {
-  const parts = String(rel || '').split(/[\\/]+/).filter(Boolean).map((part) => safeFileName(part, 'item')).filter(Boolean)
-  return parts.length ? parts.join(path.sep) : safeFileName(fallback || 'download')
+  return shareHost.safeShareRelativePath(rel, fallback)
 }
 async function copyShareDownloadFiles (files, saveDir) {
   const out = []
@@ -1253,7 +1188,7 @@ function sendFilesInternal (scope, toId, paths, batch, opts) {
       vault.appendMessage(toId, msg)
       out.push(msg)
     }
-    outboxDrainAll()
+    outbox.drainAll()
     if (rejected.length) sendToRenderer('file:rejected', { reason: 'oversize', files: rejected, limitMB: maxMB })
     return out
   }
@@ -1274,12 +1209,19 @@ function sendFilesInternal (scope, toId, paths, batch, opts) {
     vault.outboxAdd(toId, { mid, kind: 'file', path: fp, fname, size, mime, batch: batch || null, sticker, ts: msg.ts })
     out.push(msg)
   }
-  outboxDrain(toId)
+  outbox.drain(toId)
   if (rejected.length) sendToRenderer('file:rejected', { reason: 'oversize', files: rejected, limitMB: maxMB })
   return out
 }
 
 // ---------------------------------------------------------------------------
+function handleUnlocked (channel, fallback, fn) {
+  ipcMain.handle(channel, (event, ...args) => {
+    if (!vault || !vault.unlocked) return typeof fallback === 'function' ? fallback(event, ...args) : fallback
+    return fn(event, ...args)
+  })
+}
+
 ipcMain.handle('app:ping', async () => ({
   ok: true, appVersion: app.getVersion(),
   versions: { electron: process.versions.electron, node: process.versions.node, chrome: process.versions.chrome },
@@ -1300,9 +1242,9 @@ ipcMain.handle('auth:changePassword', async (_e, oldPw, newPw) => {
 ipcMain.handle('auth:resetIdentity', () => { closeChatWindows(); stopP2P(); vault.reset(); return { ok: true } })
 ipcMain.handle('auth:lock', () => { closeChatWindows(); stopP2P(); if (vault) vault.lock(); return { ok: true } })
 
-ipcMain.handle('store:getHistory', () => (vault && vault.unlocked ? vault.getHistory() : {}))
+handleUnlocked('store:getHistory', {}, () => vault.getHistory())
 
-ipcMain.handle('settings:get', () => (vault && vault.unlocked ? vault.getSettings() : {}))
+handleUnlocked('settings:get', {}, () => vault.getSettings())
 ipcMain.handle('settings:set', (_e, patch) => {
   if (!vault || !vault.unlocked) return {}
   const nextPatch = { ...(patch || {}) }
@@ -1385,12 +1327,12 @@ ipcMain.handle('msg:recall', (_e, scope, toId, mid) => {
   if (scope === 'room') { p2p.sendRecall(scope, toId, mid); return { ok: true } }
   // 私聊：① 撤回的消息从发件箱移除——绝不再补发（修复"离线/假在线时发的消息被撤回后仍补发"）
   //      ② 撤回信号入发件箱，由 outboxDrain 在对端可达时投递、recallack 确认后移除——可靠覆盖离线/假在线后上线
-  inFlight.delete(mid)
+  outbox.deleteInFlight(mid)
   if (vault && vault.unlocked) {
     vault.outboxRemove(toId, mid)
     vault.outboxAdd(toId, { mid: '__recall__' + mid, kind: 'recall', targetMid: mid, ts: Date.now() })
   }
-  outboxDrain(toId)
+  outbox.drain(toId)
   return { ok: true }
 })
 ipcMain.handle('msg:react', (_e, scope, toId, mid, emoji) => {
@@ -1456,29 +1398,26 @@ ipcMain.handle('p2p:nudge', (_e, toId) => {
   const text = vault && vault.unlocked ? (vault.getSettings().nudgeText || '') : ''
   p2p.sendNudge(toId, text)
 })
-ipcMain.handle('store:getDrafts', () => (vault && vault.unlocked ? vault.getDrafts() : {}))
-ipcMain.handle('store:getReads', () => (vault && vault.unlocked ? vault.getReads() : {}))
-ipcMain.handle('store:setRead', (_e, convId, ts) => { if (vault && vault.unlocked) vault.setRead(convId, ts) })
-ipcMain.handle('store:getRecent', () => (vault && vault.unlocked ? vault.getRecent() : {}))
-ipcMain.handle('store:setRecent', (_e, convId, meta) => { if (vault && vault.unlocked) vault.setRecent(convId, meta) })
-ipcMain.handle('store:setDraft', (_e, convId, text) => { if (vault && vault.unlocked) vault.setDraft(convId, text) })
-ipcMain.handle('store:clearHistory', () => { if (vault && vault.unlocked) vault.clearHistory(); return { ok: true } })
-ipcMain.handle('store:clearConversation', (_e, convId) => { if (vault && vault.unlocked) vault.clearConversation(convId); return { ok: true } })
-ipcMain.handle('store:clearDrafts', () => { if (vault && vault.unlocked) vault.clearDrafts(); return { ok: true } })
+handleUnlocked('store:getDrafts', {}, () => vault.getDrafts())
+handleUnlocked('store:getReads', {}, () => vault.getReads())
+handleUnlocked('store:setRead', undefined, (_e, convId, ts) => { vault.setRead(convId, ts) })
+handleUnlocked('store:getRecent', {}, () => vault.getRecent())
+handleUnlocked('store:setRecent', undefined, (_e, convId, meta) => { vault.setRecent(convId, meta) })
+handleUnlocked('store:setDraft', undefined, (_e, convId, text) => { vault.setDraft(convId, text) })
+handleUnlocked('store:clearHistory', { ok: true }, () => { vault.clearHistory(); return { ok: true } })
+handleUnlocked('store:clearConversation', { ok: true }, (_e, convId) => { vault.clearConversation(convId); return { ok: true } })
+handleUnlocked('store:clearDrafts', { ok: true }, () => { vault.clearDrafts(); return { ok: true } })
 // 联系人备注：仅本机可见
-ipcMain.handle('store:setRemark', (_e, peerId, remark) => {
-  if (!vault || !vault.unlocked) return null
+handleUnlocked('store:setRemark', null, (_e, peerId, remark) => {
   const c = vault.setContactRemark(peerId, remark)
   emitPeers()
   return c
 })
-ipcMain.handle('store:getGroups', () => (vault && vault.unlocked ? vault.getGroups() : []))
-ipcMain.handle('store:getPinnedMessages', (_e, groupId) => {
-  if (!vault || !vault.unlocked) return groupId ? [] : {}
+handleUnlocked('store:getGroups', [], () => vault.getGroups())
+handleUnlocked('store:getPinnedMessages', (_e, groupId) => (groupId ? [] : {}), (_e, groupId) => {
   return groupId ? vault.getPinnedMessages(groupId) : vault.getPinnedMessagesByGroup()
 })
-ipcMain.handle('store:createGroup', (_e, name, members) => {
-  if (!vault || !vault.unlocked) return null
+handleUnlocked('store:createGroup', null, (_e, name, members) => {
   const ownId = selfId()
   const group = vault.createGroup(name || '群聊', Array.from(new Set([ownId, ...(members || [])])), ownId)
   if (p2p) {
@@ -1533,28 +1472,6 @@ function canUseGroupPinnedMessages (group, userId) {
   return isGroupMember(group, userId)
 }
 
-function pinnedMessageTypeOf (m) {
-  if (!m) return 'text'
-  if (m.type === 'file' || m.type === 'file-offer') return (m.mime || '').indexOf('image/') === 0 ? 'image' : 'file'
-  const text = (m.text || '').toString()
-  if (/```/.test(text)) return 'code'
-  return m.type || 'text'
-}
-
-function pinnedContentPreview (m) {
-  const type = pinnedMessageTypeOf(m)
-  if (type === 'image') return '[图片]'
-  if (type === 'file') return '[文件] ' + (m.fname || '未命名文件')
-  if (type === 'code') {
-    const body = (m.text || '').toString().replace(/```/g, '').trim()
-    const s = body ? ('[代码] ' + body) : '[代码]'
-    return s.length > 80 ? s.slice(0, 80) + '…' : s
-  }
-  const text = (m.text || '').toString().trim()
-  if (!text) return '[消息]'
-  return text.length > 80 ? text.slice(0, 80) + '…' : text
-}
-
 function pinnedImageThumbnail (m) {
   if (!m || pinnedMessageTypeOf(m) !== 'image') return ''
   try {
@@ -1569,17 +1486,6 @@ function pinnedImageThumbnail (m) {
     }
   } catch (_) {}
   return ''
-}
-
-function publicPinnedRecord (pin) {
-  if (!pin) return pin
-  const out = JSON.parse(JSON.stringify(pin))
-  if (out.messageSnapshot) delete out.messageSnapshot.localPath
-  return out
-}
-
-function publicPinnedGroups (groups) {
-  return (groups || []).map((g) => ({ ...g, pins: (g.pins || []).map(publicPinnedRecord) }))
 }
 
 function buildPinnedSnapshot (m) {
@@ -2119,7 +2025,7 @@ ipcMain.handle('p2p:sendPrivate', (_e, toId, text, opts) => {
   echo.status = online ? 'sending' : 'queued'
   vault.appendMessage(toId, echo)
   vault.outboxAdd(toId, { mid, kind: 'text', text, opts: { reply: o.reply || null, fwd: o.fwd || null, batch: o.batch || null, ttl: o.ttl }, ts: echo.ts })
-  outboxDrain(toId)
+  outbox.drain(toId)
   return { ok: true, msg: echo, queued: !online }
 })
 // 手动重试：确保在发件箱中并立即尝试补发（在线则发，离线则保持"待补发"）
@@ -2132,8 +2038,8 @@ ipcMain.handle('p2p:resend', (_e, toId, mid, text, opts) => {
   }
   const inBox = (vault.getOutbox()[toId] || []).some((x) => x.mid === mid)
   if (!inBox) vault.outboxAdd(toId, { mid, kind: 'text', text: (text || '').toString(), opts: { reply: o.reply || null, fwd: o.fwd || null, batch: o.batch || null, ttl: o.ttl }, ts: Date.now() })
-  setMsgStatusOut(toId, mid, p2p.reachable(toId) ? 'sending' : 'queued')
-  outboxDrain(toId)
+  outbox.setMsgStatusOut(toId, mid, p2p.reachable(toId) ? 'sending' : 'queued')
+  outbox.drain(toId)
   return { ok: true }
 })
 // 手动重连：重建 UDP socket（自愈失败或用户主动触发时）
