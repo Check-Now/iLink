@@ -16,6 +16,7 @@ const { normalizePresence } = require('./constants')
 const { makeDotIcon, makeBadgeIcon, makeDndIcon, makeBlankIcon } = require('./icons')
 const { PinnedController, pinnedMessageTypeOf, pinnedContentPreview, publicPinnedRecord } = require('./pinned')
 const { createTrayController } = require('./tray')
+const windowLifecycle = require('./window-lifecycle')
 const { baseAvatar, avatarCrop, AVATAR_MAX_CHARS } = require('./avatarutil')
 const { Logger } = require('./logger')
 const logger = new Logger()
@@ -129,18 +130,6 @@ function windowFromEvent (event) {
   return event && event.sender ? BrowserWindow.fromWebContents(event.sender) : null
 }
 
-function applyWindowBoundsOptions (opts) {
-  return {
-    ...opts,
-    fullscreen: false,
-    kiosk: false,
-    fullscreenable: false,
-    resizable: true,
-    alwaysOnTop: false,
-    skipTaskbar: false,
-  }
-}
-
 function toggleWorkAreaMaximize (win) {
   if (!win || win.isDestroyed()) return false
   if (win.__workAreaMaximized) {
@@ -161,25 +150,8 @@ function toggleWorkAreaMaximize (win) {
 function ensureWindowOnScreen (win) {
   if (!win || win.isDestroyed()) return
   const bounds = win.getBounds()
-  const displays = screen.getAllDisplays()
-  const visible = displays.some(({ workArea }) => {
-    const right = bounds.x + bounds.width
-    const bottom = bounds.y + bounds.height
-    return right > workArea.x + 80 &&
-      bounds.x < workArea.x + workArea.width - 80 &&
-      bottom > workArea.y + 80 &&
-      bounds.y < workArea.y + workArea.height - 80
-  })
-  if (visible && bounds.width >= 400 && bounds.height >= 300) return
-  const { workArea } = screen.getPrimaryDisplay()
-  const width = Math.min(Math.max(bounds.width || 1100, 900), workArea.width)
-  const height = Math.min(Math.max(bounds.height || 720, 560), workArea.height)
-  win.setBounds({
-    x: Math.round(workArea.x + (workArea.width - width) / 2),
-    y: Math.round(workArea.y + (workArea.height - height) / 2),
-    width,
-    height,
-  })
+  const next = windowLifecycle.safeWindowBounds(bounds, screen.getAllDisplays(), screen.getPrimaryDisplay().workArea)
+  if (next) win.setBounds(next)
 }
 
 function revealWindow (win, focus) {
@@ -319,7 +291,7 @@ function notify (title, body) {
 }
 
 function createWindow () {
-  mainWindow = new BrowserWindow(applyWindowBoundsOptions({
+  mainWindow = new BrowserWindow(windowLifecycle.applyWindowBoundsOptions({
     width: 1200,
     height: 720,
     minWidth: 980,
@@ -411,7 +383,7 @@ function openChatWindow (convId) {
     return { ok: true, reused: true }
   }
 
-  const win = new BrowserWindow(applyWindowBoundsOptions({
+  const win = new BrowserWindow(windowLifecycle.applyWindowBoundsOptions({
     width: 720,
     height: 760,
     minWidth: 460,
