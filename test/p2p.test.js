@@ -98,3 +98,24 @@ test('P2P ACK retry state emits failed when no ACK arrives', async (t) => {
 
   assert.equal((await failed).status, 'failed')
 })
+
+test('P2P room member resend uses did ACK and emits delivered status', async (t) => {
+  const a = createPeer('peer-a', 'Alice')
+  const b = createPeer('peer-b', 'Bob')
+  t.after(() => { a.p2p.stop(); b.p2p.stop() })
+
+  a.p2p.start()
+  b.p2p.start()
+  await connectPeers(a, b)
+
+  const room = { id: 'room-1', name: 'Room', ownerId: 'peer-a', members: ['peer-a', 'peer-b'] }
+  const msgMid = 'room-mid'
+  const did = msgMid + '@peer-b'
+  const received = waitForEvent(b.p2p, 'message', (m) => m && m.mid === msgMid && m.room && m.room.id === room.id)
+  const delivered = waitForEvent(a.p2p, 'msg-status', (s) => s && s.mid === did && s.toId === 'peer-b' && s.status === 'delivered')
+
+  const sent = a.p2p.sendRoomMember('peer-b', room, msgMid, did, 'room hello', {})
+  assert.equal(sent.ok, true)
+  assert.equal((await received).text, 'room hello')
+  assert.equal((await delivered).status, 'delivered')
+})

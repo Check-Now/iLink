@@ -95,3 +95,25 @@ test('outboxAdd deduplicates, skips burn items, and removes empty peer queues', 
   vault.outboxRemove('peer-1', 'm1')
   assert.equal(vault.getOutbox()['peer-1'], undefined)
 })
+
+test('setSettings ignores unknown keys and returns nested copies', async (t) => {
+  const dir = tempDir()
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+
+  const vault = new Vault(dir)
+  await vault.setup('password')
+
+  const settings = vault.setSettings({
+    presence: 'dnd',
+    avatar: { type: 'text', text: 'A', color: '#123456' },
+    injected: true,
+    blacklist: ['peer-1'],
+  })
+  assert.equal(settings.presence, 'dnd')
+  assert.equal(settings.injected, undefined)
+  assert.equal(settings.blacklist, undefined)
+
+  const copy = vault.getSettings()
+  copy.avatar.text = 'B'
+  assert.equal(vault.getSettings().avatar.text, 'A')
+})
