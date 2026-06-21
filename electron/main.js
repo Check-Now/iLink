@@ -1582,8 +1582,7 @@ ipcMain.handle('store:setGroupAvatar', (_e, groupId, avatar) => {
   return next
 })
 // 退出群聊：通知其他成员（带更新后的成员表）；群主退出时自动移交给第一位成员，本地删除群记录
-ipcMain.handle('store:leaveGroup', (_e, groupId) => {
-  if (!vault || !vault.unlocked) return { ok: false }
+handleUnlocked('store:leaveGroup', { ok: false }, (_e, groupId) => {
   const group = getGroupById(groupId)
   if (!group) return { ok: false }
   const ownId = selfId()
@@ -1609,10 +1608,9 @@ ipcMain.handle('store:dismissGroup', (_e, groupId) => {
   sendToRenderer('share:changed', { groupId })
   return { ok: true }
 })
-ipcMain.handle('store:transferGroupOwner', (_e, groupId, ownerId) => {
+handleUnlocked('store:transferGroupOwner', { ok: false, error: '应用尚未就绪' }, (_e, groupId, ownerId) => {
   // 权限校验在主进程 + 领域层双重落实（前端限制不是安全边界）：
   // 仅现群主可转让；群须存在且本人仍是群主；新群主须为群成员且不能是现群主本人。
-  if (!vault || !vault.unlocked) return { ok: false, error: '应用尚未就绪' }
   const ownId = selfId()
   const guard = requireGroupOwner(groupId, ownId, '群聊不存在或已解散', '仅群主可转让群主权限')
   if (!guard.ok) return guard
@@ -1630,8 +1628,7 @@ ipcMain.handle('store:transferGroupOwner', (_e, groupId, ownerId) => {
   return { ok: true, group: updated }
 })
 // ---------------- 群共享空间 IPC ----------------
-ipcMain.handle('share:list', (_e, groupId) => {
-  if (!vault || !vault.unlocked) return []
+handleUnlocked('share:list', [], (_e, groupId) => {
   const list = vault.getShareSpacesByGroup(groupId)
   // 后台向在线宿主拉取最新文件数/更新时间；仅在确有变化时通知刷新（避免 share:changed→list→info 循环）
   for (const sp of list) {
@@ -1680,8 +1677,7 @@ ipcMain.handle('share:create', (_e, groupId, name, dir) => {
   sendToRenderer('share:changed', { spaceId })
   return { ok: true, space: shareSpaceView(sp) }
 })
-ipcMain.handle('share:deleteSpace', (_e, spaceId) => {
-  if (!vault || !vault.unlocked) return { ok: false }
+handleUnlocked('share:deleteSpace', { ok: false }, (_e, spaceId) => {
   const sp = vault.getShareSpace(spaceId)
   if (!sp) return { ok: false, error: '空间不存在' }
   if (!shareCanDeleteSpace(sp, selfId())) return { ok: false, error: '无权限（仅创建者可删除群文件）' }
@@ -1699,8 +1695,7 @@ ipcMain.handle('share:deleteSpace', (_e, spaceId) => {
   logger.log('share', 'delete_space', { spaceId, groupId: sp.groupId })
   return { ok: true }
 })
-ipcMain.handle('share:dir', async (_e, spaceId, parentId) => {
-  if (!vault || !vault.unlocked) return { ok: false, error: '未就绪' }
+handleUnlocked('share:dir', { ok: false, error: '未就绪' }, async (_e, spaceId, parentId) => {
   const sp = vault.getShareSpace(spaceId)
   if (!sp) return { ok: false, error: '共享空间不存在' }
   parentId = parentId || 'root'
@@ -1722,8 +1717,7 @@ ipcMain.handle('share:dir', async (_e, spaceId, parentId) => {
   if (r && r.ok) vault.setShareSnapshot(spaceId, parentId, r)
   return r
 })
-ipcMain.handle('share:search', async (_e, groupId, query, spaceId) => {
-  if (!vault || !vault.unlocked) return { ok: false, error: '未就绪' }
+handleUnlocked('share:search', { ok: false, error: '未就绪' }, async (_e, groupId, query, spaceId) => {
   const q = String(query || '').trim()
   if (!q) return { ok: true, results: [] }
   const guard = requireGroupMember(groupId, selfId(), '你不是群成员', '你不是群成员')
@@ -1758,7 +1752,7 @@ ipcMain.handle('share:search', async (_e, groupId, query, spaceId) => {
   }
   return { ok: true, results }
 })
-ipcMain.handle('share:createFolder', async (_e, spaceId, parentId, name) => {
+handleUnlocked('share:createFolder', { ok: false, error: '未就绪' }, async (_e, spaceId, parentId, name) => {
   const sp = vault.getShareSpace(spaceId)
   if (!sp) return { ok: false, error: '共享空间不存在' }
   if (!shareIsGroupMember(sp, selfId())) return { ok: false, error: '你不是群成员' }
@@ -1772,7 +1766,7 @@ ipcMain.handle('share:createFolder', async (_e, spaceId, parentId, name) => {
   if (!isSpaceOnline(sp)) return { ok: false, offline: true, error: '共享主机离线，暂时不可访问' }
   return shareRequest(sp.hostUserId, 'folder_create', { spaceId, parentId, name })
 })
-ipcMain.handle('share:rename', async (_e, spaceId, entryId, newName) => {
+handleUnlocked('share:rename', { ok: false, error: '未就绪' }, async (_e, spaceId, entryId, newName) => {
   const sp = vault.getShareSpace(spaceId)
   if (!sp) return { ok: false, error: '共享空间不存在' }
   if (!shareIsGroupMember(sp, selfId())) return { ok: false, error: '你不是群成员' }
@@ -1786,7 +1780,7 @@ ipcMain.handle('share:rename', async (_e, spaceId, entryId, newName) => {
   if (!isSpaceOnline(sp)) return { ok: false, offline: true, error: '共享主机离线，暂时不可访问' }
   return shareRequest(sp.hostUserId, 'rename', { spaceId, entryId, newName })
 })
-ipcMain.handle('share:delete', async (_e, spaceId, entryId) => {
+handleUnlocked('share:delete', { ok: false, error: '未就绪' }, async (_e, spaceId, entryId) => {
   const sp = vault.getShareSpace(spaceId)
   if (!sp) return { ok: false, error: '共享空间不存在' }
   if (!shareIsGroupMember(sp, selfId())) return { ok: false, error: '你不是群成员' }
@@ -1798,7 +1792,7 @@ ipcMain.handle('share:delete', async (_e, spaceId, entryId) => {
   if (!isSpaceOnline(sp)) return { ok: false, offline: true, error: '共享主机离线，暂时不可访问' }
   return shareRequest(sp.hostUserId, 'delete', { spaceId, entryId })
 })
-ipcMain.handle('share:upload', async (_e, spaceId, parentId, paths, rename) => {
+handleUnlocked('share:upload', { ok: false, error: '未就绪' }, async (_e, spaceId, parentId, paths, rename) => {
   const sp = vault.getShareSpace(spaceId)
   if (!sp) return { ok: false, error: '共享空间不存在' }
   if (!shareIsGroupMember(sp, selfId())) return { ok: false, error: '你不是群成员' }
@@ -1813,7 +1807,7 @@ ipcMain.handle('share:upload', async (_e, spaceId, parentId, paths, rename) => {
   }
   return { ok: results.every((r) => r && r.ok), results }
 })
-ipcMain.handle('share:uploadFolder', async (_e, spaceId, parentId, dirPath) => {
+handleUnlocked('share:uploadFolder', { ok: false, error: '未就绪' }, async (_e, spaceId, parentId, dirPath) => {
   const sp = vault.getShareSpace(spaceId)
   if (!sp) return { ok: false, error: '共享空间不存在' }
   if (!shareIsGroupMember(sp, selfId())) return { ok: false, error: '你不是群成员' }
@@ -1877,7 +1871,7 @@ ipcMain.handle('share:uploadFolder', async (_e, spaceId, parentId, dirPath) => {
   if (isHostSelf(sp)) persistHostSpace(sp)
   return { ok: summary.failed === 0, summary }
 })
-ipcMain.handle('share:download', async (_e, spaceId, entryId, suggestedName, saveDir) => {
+handleUnlocked('share:download', { ok: false, error: '未就绪' }, async (_e, spaceId, entryId, suggestedName, saveDir) => {
   const sp = vault.getShareSpace(spaceId)
   if (!sp) return { ok: false, error: '群文件不存在' }
   if (!shareIsGroupMember(sp, selfId())) return { ok: false, error: '你不是群成员' }
