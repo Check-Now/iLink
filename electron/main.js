@@ -18,7 +18,7 @@ const { PinnedController, pinnedMessageTypeOf, pinnedContentPreview, publicPinne
 const { createTrayController } = require('./tray')
 const windowLifecycle = require('./window-lifecycle')
 const { imagePreviewDataUrl } = require('./preview')
-const { baseAvatar, avatarCrop, AVATAR_MAX_CHARS } = require('./avatarutil')
+const { AVATAR_MAX_CHARS, publicAvatar } = require('./avatarutil')
 const { Logger } = require('./logger')
 const logger = new Logger()
 
@@ -51,37 +51,21 @@ function getAppIcon () {
   return null
 }
 
-// 头像可广播化：基础字段(类型/文字/颜色)与裁剪参数复用 ./avatarutil；
-// 图片超 AVATAR_MAX_CHARS 时，本进程额外用 nativeImage 生成缩略图兜底（p2p 层无此能力）
+function avatarThumbnailDataUrl (dataUrl) {
+  try {
+    const img = nativeImage.createFromDataURL(String(dataUrl || ''))
+    if (!img || img.isEmpty()) return ''
+    for (const size of [96, 72, 56]) {
+      const thumb = img.resize({ width: size, height: size, quality: 'good' })
+      const out = 'data:image/jpeg;base64,' + thumb.toJPEG(68).toString('base64')
+      if (out.length <= AVATAR_MAX_CHARS) return out
+    }
+  } catch (_) {}
+  return ''
+}
+
 function publishableAvatar (avatar) {
-  const out = baseAvatar(avatar)
-  if (!out) return null
-  if (out.type === 'image' && avatar.imageDataUrl) {
-    const crop = avatarCrop(avatar)
-    const raw = String(avatar.imageDataUrl)
-    const stat = typeof avatar.staticDataUrl === 'string' ? avatar.staticDataUrl : ''
-    // 原图（含 GIF 动图）够小则原样广播，保证对方看到的与本机一致
-    if (raw.length <= AVATAR_MAX_CHARS) return { ...out, imageDataUrl: raw, ...crop }
-    // GIF 过大时退回静态首帧缩略图
-    if (stat && stat.length <= AVATAR_MAX_CHARS) return { ...out, imageDataUrl: stat, ...crop }
-    try {
-      const img = nativeImage.createFromDataURL(stat || raw)
-      if (img && !img.isEmpty()) {
-        for (const size of [96, 72, 56]) {
-          const thumb = img.resize({ width: size, height: size, quality: 'good' })
-          const dataUrl = 'data:image/jpeg;base64,' + thumb.toJPEG(68).toString('base64')
-          if (dataUrl.length <= AVATAR_MAX_CHARS) {
-            out.imageDataUrl = dataUrl
-            out.zoom = crop.zoom
-            out.x = crop.x
-            out.y = crop.y
-            break
-          }
-        }
-      }
-    } catch (_) {}
-  }
-  return out
+  return publicAvatar(avatar, { makeThumbnail: avatarThumbnailDataUrl })
 }
 
 function resolveDataDir () {
@@ -1393,21 +1377,9 @@ ipcMain.handle('store:removeGroupMember', (_e, groupId, memberId) => {
 })
 // 群头像载入：选图后输出 96px 压缩 JPEG，小图直接保留，过大才重压缩；失败返回 null 而非空壳对象
 function groupAvatarPayload (avatar) {
-  if (!avatar || typeof avatar !== 'object') return null
-  if (avatar.type === 'image' && typeof avatar.imageDataUrl === 'string' && avatar.imageDataUrl.startsWith('data:image/')) {
-    // 32KB 上限：room-avatar 包加密 + base64 膨胀约 4/3，需留足 UDP 报文余量
-    const crop = avatarCrop(avatar)
-    if (avatar.imageDataUrl.length <= AVATAR_MAX_CHARS) {
-      return { type: 'image', imageDataUrl: avatar.imageDataUrl, ...crop } // 含 GIF 动图原样下发
-    }
-    // GIF 过大退回静态首帧
-    if (typeof avatar.staticDataUrl === 'string' && avatar.staticDataUrl.startsWith('data:image/') && avatar.staticDataUrl.length <= AVATAR_MAX_CHARS) {
-      return { type: 'image', imageDataUrl: avatar.staticDataUrl, ...crop }
-    }
-    const pub = publishableAvatar(avatar)
-    return (pub && pub.imageDataUrl) ? pub : null
-  }
-  return publishableAvatar(avatar)
+  const pub = publishableAvatar(avatar)
+  if (avatar && avatar.type === 'image' && avatar.imageDataUrl && (!pub || !pub.imageDataUrl)) return null
+  return pub
 }
 // 修改群头像，仅群主可操作；头像同步给成员
 ipcMain.handle('store:setGroupAvatar', (_e, groupId, avatar) => {

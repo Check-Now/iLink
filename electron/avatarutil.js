@@ -25,17 +25,23 @@ function baseAvatar (avatar) {
   return out
 }
 
-// 轻量可广播头像（无 electron 依赖）：图片优先原图、超限退静态首帧、再超限则丢弃图片数据。
-function publicAvatar (avatar) {
+function pickAvatarImageDataUrl (avatar, makeThumbnail) {
+  const raw = String(avatar.imageDataUrl || '')
+  const stat = typeof avatar.staticDataUrl === 'string' ? avatar.staticDataUrl : ''
+  if (raw.length <= AVATAR_MAX_CHARS) return raw
+  if (stat && stat.length <= AVATAR_MAX_CHARS) return stat
+  return typeof makeThumbnail === 'function' ? makeThumbnail(stat || raw) : ''
+}
+
+// 轻量可广播头像：p2p 默认无缩略图兜底；main 可注入 nativeImage 兜底。
+function publicAvatar (avatar, opts) {
   const out = baseAvatar(avatar)
   if (!out) return null
   if (out.type === 'image' && avatar.imageDataUrl) {
-    const raw = String(avatar.imageDataUrl)
-    const stat = typeof avatar.staticDataUrl === 'string' ? avatar.staticDataUrl : ''
-    const pick = raw.length <= AVATAR_MAX_CHARS ? raw : (stat && stat.length <= AVATAR_MAX_CHARS ? stat : '')
+    const pick = pickAvatarImageDataUrl(avatar, opts && opts.makeThumbnail)
     if (pick) { out.imageDataUrl = pick; Object.assign(out, avatarCrop(avatar)) }
   }
   return out
 }
 
-module.exports = { AVATAR_MAX_CHARS, avatarCrop, baseAvatar, publicAvatar }
+module.exports = { AVATAR_MAX_CHARS, avatarCrop, baseAvatar, publicAvatar, pickAvatarImageDataUrl }
