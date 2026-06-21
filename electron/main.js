@@ -15,6 +15,7 @@ const { OutboxController } = require('./outbox')
 const { normalizePresence } = require('./constants')
 const { makeDotIcon, makeBadgeIcon, makeDndIcon, makeBlankIcon } = require('./icons')
 const { PinnedController, pinnedMessageTypeOf, pinnedContentPreview, publicPinnedRecord } = require('./pinned')
+const { createTrayController } = require('./tray')
 const { baseAvatar, avatarCrop, AVATAR_MAX_CHARS } = require('./avatarutil')
 const { Logger } = require('./logger')
 const logger = new Logger()
@@ -29,7 +30,6 @@ const chatWindows = new Map()
 let p2p = null
 /** @type {Vault | null} */
 let vault = null
-let tray = null
 let ft = null
 let isQuitting = false
 let suppressTrayOnMinimize = false // 截图等程序性最小化仍复用该标记；最小化不再隐藏任务栏卡片
@@ -110,6 +110,19 @@ const pinnedSync = new PinnedController({
   selfId: () => selfId(),
   isGroupMember: (group, userId) => isGroupMember(group, userId),
   sendToRenderer,
+})
+
+const trayController = createTrayController({
+  Tray,
+  Menu,
+  runtime,
+  getAppIcon,
+  showWindow,
+  setDnd,
+  onQuit: () => { isQuitting = true; app.quit() },
+  makeBadgeIcon,
+  makeBlankIcon,
+  makeDndIcon,
 })
 
 function windowFromEvent (event) {
@@ -251,45 +264,15 @@ function showWindow () {
   revealWindow(mainWindow)
 }
 
-function trayBaseIcon () {
-  if (runtime.dnd) return makeDndIcon()
-  const ic = getAppIcon()
-  return ic ? ic.resize({ width: 16, height: 16 }) : makeBadgeIcon(false)
-}
-
-// 托盘闪烁：窗口不可见时收到新消息，亮/灭交替，显示窗口或清空未读后停止
-let trayFlashTimer = null
-let trayFlashOn = false
 function startTrayFlash () {
-  if (!tray || trayFlashTimer || runtime.dnd) return
-  trayFlashTimer = setInterval(() => {
-    if (!tray) return
-    trayFlashOn = !trayFlashOn
-    try { tray.setImage(trayFlashOn ? makeBlankIcon() : trayBaseIcon()) } catch (_) {}
-  }, 500)
+  trayController.startFlash()
 }
 function stopTrayFlash () {
-  if (trayFlashTimer) { clearInterval(trayFlashTimer); trayFlashTimer = null }
-  trayFlashOn = false
-  if (tray) { try { tray.setImage(trayBaseIcon()) } catch (_) {} }
-}
-
-function buildTrayMenu () {
-  return Menu.buildFromTemplate([
-    { label: '显示主窗口', click: () => showWindow() },
-    { label: '全局免打扰', type: 'checkbox', checked: !!runtime.dnd, click: (item) => setDnd(item.checked) },
-    { type: 'separator' },
-    { label: '退出', click: () => { isQuitting = true; app.quit() } },
-  ])
+  trayController.stopFlash()
 }
 // 同步托盘图标、菜单勾选与提示文字（免打扰样式在这里生效）
 function updateTrayState () {
-  if (!tray) return
-  try {
-    tray.setContextMenu(buildTrayMenu())
-    if (!trayFlashTimer) tray.setImage(trayBaseIcon())
-    tray.setToolTip(runtime.dnd ? 'iLink - 免打扰' : 'iLink')
-  } catch (_) {}
+  trayController.update()
 }
 
 // 全局免打扰开关（托盘菜单入口）；与状态选择里的"免打扰"同一开关
@@ -305,13 +288,7 @@ function setDnd (on) {
 }
 
 function setupTray () {
-  if (tray) return
-  try {
-    tray = new Tray(trayBaseIcon())
-    tray.setToolTip('iLink')
-    tray.setContextMenu(buildTrayMenu())
-    tray.on('click', () => { stopTrayFlash(); showWindow() })
-  } catch (_) {}
+  trayController.setup()
 }
 
 function applyAutoStart (on) {
@@ -1216,11 +1193,7 @@ ipcMain.handle('ui:setUnread', (e, n) => {
       if (n > 0) mainWindow.setOverlayIcon(makeDotIcon([255, 59, 48], 16), n + ' 条未读')
       else mainWindow.setOverlayIcon(null, '')
     }
-    if (tray) {
-      if (n === 0) stopTrayFlash()
-      if (!trayFlashTimer) tray.setImage(trayBaseIcon())
-      tray.setToolTip(n > 0 ? ('iLink - ' + n + ' 条未读') : (runtime.dnd ? 'iLink - 免打扰' : 'iLink'))
-    }
+    trayController.setUnread(n)
   } catch (_) {}
 })
 ipcMain.handle('ui:attention', (e, opts) => {
