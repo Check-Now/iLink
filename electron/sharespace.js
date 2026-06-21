@@ -58,17 +58,6 @@ function isInside (root, child) {
   return c === r || c.startsWith(r + path.sep)
 }
 
-function sha256File (filePath) {
-  const h = crypto.createHash('sha256')
-  const fd = fs.openSync(filePath, 'r')
-  try {
-    const buf = Buffer.alloc(1024 * 1024)
-    let n
-    while ((n = fs.readSync(fd, buf, 0, buf.length, null)) > 0) h.update(buf.subarray(0, n))
-  } finally { fs.closeSync(fd) }
-  return h.digest('hex')
-}
-
 // 异步流式计算 SHA-256（不阻塞事件循环，适合大文件）
 function sha256FileAsync (filePath) {
   return new Promise((resolve, reject) => {
@@ -433,6 +422,6 @@ class ShareStore {
 module.exports = {
   ShareStore,
   // 纯函数导出（供测试与复用）
-  isReservedName, checkSegment, safeFileName, isInside, sha256File,
+  isReservedName, checkSegment, safeFileName, isInside,
   ROOT_ID,
 }

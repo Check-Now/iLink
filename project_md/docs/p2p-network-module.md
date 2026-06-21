@@ -108,6 +108,6 @@ P2P 只负责发现和文本/控制消息。文件内容走 `FileTransfer` 的 T
 
 ## 修改注意事项
 - 修改 `MAGIC` 或包结构会影响版本兼容。
-- 修改 ACK 时序要同步测试 `test/ack-smoke.js`。
+- 修改 ACK 时序要同步测试 `test/p2p.test.js`（`npm test`）。
 - 修改 presence 字段要同步 `main.js`、`vault.js`、UI 和文件传输。
 - 群聊补发依赖 `did` 规则，不要把 `msgMid` 直接当多成员补发 ACK ID。

@@ -2937,8 +2937,8 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
       if (!el) { showChatNotice('没有找到这条消息'); return }
       el.scrollIntoView({ block: 'center', behavior: 'smooth' })
       setFlashMid(mid)
-      if (flashTimerRef.current) clearTimeout(flashTimerRef.current)
-      flashTimerRef.current = setTimeout(() => setFlashMid(null), 1800)
+      if (flashTimerRef.current) clearManagedTimeout(flashTimerRef.current)
+      flashTimerRef.current = setManagedTimeout(() => setFlashMid(null), 1800)
     }, 120)
   }
   function sortPinnedList (list) {
@@ -3474,8 +3474,8 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
     const el = sideItemRefs.current[target.id]
     if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
     setSideFocusId(target.id)
-    if (sideFocusTimerRef.current) clearTimeout(sideFocusTimerRef.current)
-    sideFocusTimerRef.current = setTimeout(() => setSideFocusId(null), 1500)
+    if (sideFocusTimerRef.current) clearManagedTimeout(sideFocusTimerRef.current)
+    sideFocusTimerRef.current = setManagedTimeout(() => setSideFocusId(null), 1500)
   }
   let lastDay = null
 

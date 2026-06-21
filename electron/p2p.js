@@ -12,11 +12,11 @@ const dgram = require('dgram')
 const os = require('os')
 const crypto = require('crypto')
 const { EventEmitter } = require('events')
+const { normalizePresence } = require('./constants')
 const cryptoMod = require('./crypto')
 const { publicAvatar } = require('./avatarutil') // 头像限长/裁剪逻辑与 main 进程共用，避免重复
 
 const DISCOVERY_PORT = 51888
-const MAGIC = 'FRDM1'
 const HEARTBEAT_MS = 2000  // 心跳更频繁，离线判定更快
 const OFFLINE_MS = 6000     // 约 3 个心跳未到即判离线（原 10s → 6s）
 const SWEEP_MS = 1500       // 更勤地扫描离线
@@ -24,7 +24,7 @@ const SEEN_MAX = 800
 const ACK_TIMEOUT_MS = 1500 // 私聊消息等待对端 ACK 的超时；超时未确认则重发
 const ACK_MAX_RETRY = 3     // 最大重发次数(含首发共 4 次)，全部失败后标记“失败”
 const MAX_TEXT_CHARS = 3000        // 单条文本消息字数上限：消息体内嵌头像(≤32KB)+正文加密后须装进一个 UDP 数据报，超长会 EMSGSIZE 静默失败
-const SAFE_DATAGRAM_BYTES = 60000  // 单个 UDP 数据报安全上限(<理论 65507)；群发广播包超过此值则跳过广播，改由可靠单播(sendRoomMember)投递
+const { SAFE_DATAGRAM_BYTES, encode: encodePacket, decode: decodePacket } = require('./protocol')
 const TEXT_TOO_LONG_ERR = '消息过长，请精简后发送（上限 ' + MAX_TEXT_CHARS + ' 字）'
 
 // 文本是否超过单条消息上限。超长文本加密后会使 UDP 包超限，须在入队/发送前拦截，避免静默失败或发件箱反复重发
@@ -179,12 +179,8 @@ class P2P extends EventEmitter {
     this.start()
   }
 
-  _encode (obj) { return Buffer.from(MAGIC + JSON.stringify(obj), 'utf8') }
-  _decode (buf) {
-    if (!buf || buf.length <= MAGIC.length) return null
-    if (buf.toString('utf8', 0, MAGIC.length) !== MAGIC) return null
-    try { return JSON.parse(buf.toString('utf8', MAGIC.length)) } catch (_) { return null }
-  }
+  _encode (obj) { return encodePacket(obj) }
+  _decode (buf) { return decodePacket(buf) }
 
   _broadcastTargets () {
     const set = new Set(['255.255.255.255'])
@@ -389,7 +385,7 @@ class P2P extends EventEmitter {
   setTport (t) { this.tport = t || 0; this._sendPresence() }
 
   setStatus (s) { this.status = (s || '').toString().slice(0, 40); this._sendPresence() }
-  setPresence (p) { this.presence = ['online', 'busy', 'away', 'dnd'].includes(p) ? p : 'online'; this._sendPresence() }
+  setPresence (p) { this.presence = normalizePresence(p); this._sendPresence() }
   setAvatar (avatar) { this.avatar = publicAvatar(avatar); this._sendPresence(); this._emitPeers() }
 
   sendNudge (toId, text) {
@@ -399,32 +395,25 @@ class P2P extends EventEmitter {
   }
 
   // 群共享空间·加密单播控制信令。obj: { kind, reqId, action, data }。返回 { ok } 或 { ok:false, error }
-  sendShare (toId, obj) {
+  // 加密单播控制信令公共实现（share/pin 等共用）：在线/公钥校验 → 会话密钥 → 加密 → 编码 → 超限判断 → 单播。
+  // 包结构 { t, from, to, spub, sport, enc } 对各信令保持一致，确保线上字节布局与历史实现等价。
+  _sendEncryptedSignal (toId, t, obj, oversizeError) {
     const peer = this.peers.get(toId)
     if (!peer || !peer.online || !peer.uport || !peer.address) return { ok: false, error: '对方离线' }
     if (!peer.pub) return { ok: false, error: '尚未拿到对方公钥' }
     const key = this._keyForPub(peer.pub)
     if (!key) return { ok: false, error: '无法建立加密会话' }
     const enc = cryptoMod.encrypt(key, JSON.stringify(obj || {}))
-    const pkt = this._encode({ t: 'share', from: this.id, to: toId, spub: this.pub, sport: this.uport, enc })
-    if (pkt.length > SAFE_DATAGRAM_BYTES) return { ok: false, error: '载荷过大(目录项过多)，请分目录查看' }
+    const pkt = this._encode({ t, from: this.id, to: toId, spub: this.pub, sport: this.uport, enc })
+    if (pkt.length > SAFE_DATAGRAM_BYTES) return { ok: false, error: oversizeError }
     if (!this._unicast(peer, pkt)) return { ok: false, error: 'unicast unavailable' }
     return { ok: true }
   }
 
+  sendShare (toId, obj) { return this._sendEncryptedSignal(toId, 'share', obj, '载荷过大(目录项过多)，请分目录查看') }
+
   // 置顶消息·加密单播控制信令。obj: { kind, reqId, groupIds?, groups? }。
-  sendPinSignal (toId, obj) {
-    const peer = this.peers.get(toId)
-    if (!peer || !peer.online || !peer.uport || !peer.address) return { ok: false, error: '对方离线' }
-    if (!peer.pub) return { ok: false, error: '尚未拿到对方公钥' }
-    const key = this._keyForPub(peer.pub)
-    if (!key) return { ok: false, error: '无法建立加密会话' }
-    const enc = cryptoMod.encrypt(key, JSON.stringify(obj || {}))
-    const pkt = this._encode({ t: 'pin', from: this.id, to: toId, spub: this.pub, sport: this.uport, enc })
-    if (pkt.length > SAFE_DATAGRAM_BYTES) return { ok: false, error: '置顶消息列表过大' }
-    if (!this._unicast(peer, pkt)) return { ok: false, error: 'unicast unavailable' }
-    return { ok: true }
-  }
+  sendPinSignal (toId, obj) { return this._sendEncryptedSignal(toId, 'pin', obj, '置顶消息列表过大') }
 
   _buildPlaintext (text, opts) {
     const o = opts || {}

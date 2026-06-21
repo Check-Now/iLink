@@ -12,7 +12,7 @@
 - 通讯协议：Electron IPC、局域网 UDP 广播/单播发现与消息投递、TCP 直连文件传输
 - 加密方式：主密码 scrypt 派生、AES-256-GCM 本地加密；P2P 使用 X25519、HKDF-SHA256、AES-256-GCM
 - 文件传输方式：TCP 直连、长度帧协议、分块加密、`.part` 断点续传、SHA-256 完整性校验
-- 测试：Node smoke test，目前有 `test/ack-smoke.js` 验证 P2P 私聊 ACK、去重和失败路径
+- 测试：Node 内置 `node:test` 单元测试，位于 `test/*.test.js`（crypto、p2p、pathutil、pinned、sharespace、vault），运行 `npm test`（即 `node --test`）
 
 ## 目录结构
 - `/electron`：Electron 主进程和核心业务逻辑，包括窗口、IPC、P2P、文件传输、加密、本地存储、日志

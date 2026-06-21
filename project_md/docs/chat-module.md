@@ -101,4 +101,4 @@
 - 群聊离线成员：上线后收到之前的群消息。
 - 阅后即焚：不落库、不离线补发。
 - 撤回：本机和对端均标记撤回，离线后上线也能收到撤回信号。
-- ACK smoke：运行 `node test/ack-smoke.js`。
+- ACK 测试：运行 `npm test`（`test/p2p.test.js` 覆盖私聊 ACK→delivered 与超时 failed）。

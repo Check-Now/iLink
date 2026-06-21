@@ -40,4 +40,4 @@
 路径穿越（`..`/绝对路径/盘符）、Windows 非法字符与保留名（CON/PRN/NUL/COM1…）一律拒绝；落盘前 `.part` 暂存校验后改名；上传/下载双向 SHA-256 校验；非群成员请求拒绝；空间删除限创建者。
 
 ## 自测
-`test/sharespace-smoke.js`（核心逻辑）、`test/sharespace-signal-smoke.js`（控制信令）、`test/sharespace-transfer-smoke.js`（端到端传输，含 100MB 大文件），已并入 `npm test`。
+`test/sharespace.test.js` 覆盖 `ShareStore` 上传/重名改名/文件夹下载清单/递归删除与路径穿越拒绝；`test/pathutil.test.js` 覆盖文件名净化（含 sharespace 复用）。运行 `npm test`。

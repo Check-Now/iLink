@@ -209,11 +209,22 @@
 
 ## 测试
 
-### `test/ack-smoke.js`
-- 作用：直接复用 `P2P` 类验证私聊 ACK 路径。
-- 覆盖点：
-  - 正常发送：`sending -> sent -> delivered`
-  - 接收端去重
-  - ACK 超时重试后失败
-- 运行方式：
-  - `node test/ack-smoke.js`
+Node 内置 `node:test` 单元测试，位于 `test/*.test.js`，运行 `npm test`（即 `node --test`，自动发现）。
+
+### `test/crypto.test.js`
+- X25519 派生密钥的消息加解密 round-trip；Buffer 加解密及篡改检测（GCM 认证失败）。
+
+### `test/p2p.test.js`
+- 直接复用 `P2P` 类验证私聊 ACK：正常 `sending -> sent -> delivered`；ACK 超时重试耗尽后 `failed`。
+
+### `test/vault.test.js`
+- setup/unlock/改密 round-trip；损坏 store 解锁时备份且不覆盖原数据（`ERR_VAULT_STORE_CORRUPT`）；`appendMessage` 按 ts 有序、容量上限、跳过阅后即焚；`outboxAdd` 去重。
+
+### `test/sharespace.test.js`
+- `ShareStore` 上传/重名改名/文件夹下载清单/递归删除；拒绝越界片段与路径穿越回退。
+
+### `test/pathutil.test.js`
+- `safeFileName` 去穿越/保留名/危险后缀/非法字符、长度钳制；sharespace 与 sharespace-host 复用同一净化逻辑。
+
+### `test/pinned.test.js`
+- 置顶消息类型/预览文本推导；公开置顶记录剥离本地路径且不改动源对象。

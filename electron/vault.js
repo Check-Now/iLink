@@ -10,6 +10,7 @@ const path = require('path')
 const crypto = require('crypto')
 const os = require('os')
 const cryptoMod = require('./crypto')
+const { normalizePresence } = require('./constants')
 
 const SCRYPT = { N: 16384, r: 8, p: 1, keyLen: 32 }
 const MAGIC = 'FREEDOM_VAULT_OK'
@@ -17,6 +18,16 @@ const HISTORY_CAP = 1000
 const PINNED_MESSAGE_CAP = 10
 const DAY_MS = 24 * 60 * 60 * 1000 // 一天的毫秒数（历史保留裁剪用）
 const SAVE_DEBOUNCE_MS = 300       // 落盘去抖：合并 300ms 内的多次写
+// settings 持久化键白名单：渲染层只能写入这些已知键，防止任意键被注入持久化 settings（纵深防御）。
+// 必须与 _ensureSettings 覆盖的字段保持一致；blacklist/translucency 为已移除功能，刻意不纳入。
+const ALLOWED_SETTING_KEYS = new Set([
+  'burnDefault', 'burnTtl', 'anonymous', 'autoLockMin', 'retentionDays',
+  'theme', 'uiStyle', 'fontPx', 'chatFont', 'nudgeText', 'chatFontPx',
+  'notifyEnabled', 'notifyPreview', 'showTyping', 'sendKey', 'minimizeToTray',
+  'autoStart', 'closeAction', 'receiveMode', 'downloadDir', 'maxFileMB',
+  'markdown', 'pinned', 'muted', 'statusText', 'presence', 'udpPort',
+  'broadcastAddrs', 'avatar',
+])
 
 function defaultName () {
   let h = ''
@@ -113,7 +124,7 @@ class Vault {
     if (!Array.isArray(s.pinned)) s.pinned = []
     if (!Array.isArray(s.muted)) s.muted = []
     if (typeof s.statusText !== 'string') s.statusText = ''
-    if (!['online', 'busy', 'away', 'dnd'].includes(s.presence)) s.presence = 'online' // dnd(免打扰)必须可持久化；未知值安全回退 online
+    s.presence = normalizePresence(s.presence) // dnd(免打扰)必须可持久化；未知值安全回退 online
     if (typeof s.udpPort !== 'number') s.udpPort = 51888
     if (typeof s.broadcastAddrs !== 'string') s.broadcastAddrs = ''
     if (!s.avatar || typeof s.avatar !== 'object') s.avatar = { type: 'text', text: '', color: '' }
@@ -682,10 +693,16 @@ class Vault {
     return out
   }
 
-  getSettings () { return this.data ? { ...this.data.settings } : {} }
+  // 深拷贝返回：调用方拿到的是隔离副本，对 avatar/pinned/muted 等嵌套对象的修改不会污染内存中的真实 settings。
+  getSettings () { return this.data ? JSON.parse(JSON.stringify(this.data.settings)) : {} }
 
   setSettings (patch) {
-    if (this.data) { this.data.settings = { ...this.data.settings, ...(patch || {}) }; this._save() }
+    if (this.data) {
+      const filtered = {}
+      for (const k of Object.keys(patch || {})) if (ALLOWED_SETTING_KEYS.has(k)) filtered[k] = patch[k]
+      this.data.settings = { ...this.data.settings, ...filtered }
+      this._save()
+    }
     return this.getSettings()
   }
 }
