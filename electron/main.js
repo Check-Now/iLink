@@ -14,7 +14,7 @@ const shareHost = require('./sharespace-host')
 const { OutboxController } = require('./outbox')
 const { normalizePresence } = require('./constants')
 const { makeDotIcon, makeBadgeIcon, makeDndIcon, makeBlankIcon } = require('./icons')
-const { pinnedMessageTypeOf, pinnedContentPreview, publicPinnedRecord, publicPinnedGroups } = require('./pinned')
+const { PinnedController, pinnedMessageTypeOf, pinnedContentPreview, publicPinnedRecord } = require('./pinned')
 const { baseAvatar, avatarCrop, AVATAR_MAX_CHARS } = require('./avatarutil')
 const { Logger } = require('./logger')
 const logger = new Logger()
@@ -35,8 +35,6 @@ let isQuitting = false
 let suppressTrayOnMinimize = false // 截图等程序性最小化仍复用该标记；最小化不再隐藏任务栏卡片
 const pendingFiles = new Map()
 const runtime = { minimizeToTray: true, notifyEnabled: true, notifyPreview: true, closeAction: 'ask', dnd: false }
-const pinnedSyncLastRequest = new Map()
-const PINNED_SYNC_THROTTLE_MS = 10000
 const PINNED_THUMB_MAX_CHARS = 16 * 1024
 const TEMP_IMAGE_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -104,6 +102,14 @@ const outbox = new OutboxController({
   isGroupMember: (group, userId) => isGroupMember(group, userId),
   sendToRenderer,
   logger,
+})
+
+const pinnedSync = new PinnedController({
+  getVault: () => vault,
+  getP2P: () => p2p,
+  selfId: () => selfId(),
+  isGroupMember: (group, userId) => isGroupMember(group, userId),
+  sendToRenderer,
 })
 
 function windowFromEvent (event) {
@@ -483,11 +489,11 @@ function startP2P () {
     logPeerTransitions(list || [])
     emitPeers()
     outbox.drainAll() // 任一对端可达即尝试补发其发件箱（修复"恢复早于离线判定"导致不补发）
-    requestPinnedListsFromPeers(list || [])
+    pinnedSync.requestListsFromPeers(list || [])
   })
   p2p.on('presence', (peer) => {
     if (peer && peer.id) outbox.drain(peer.id)
-    if (peer && peer.id) requestPinnedListFromPeer(peer.id)
+    if (peer && peer.id) pinnedSync.requestListFromPeer(peer.id)
   })
   p2p.on('message', (m) => {
     if (m.scope === 'group') return
@@ -508,7 +514,7 @@ function startP2P () {
       return
     }
     if (m.room && vault && vault.unlocked) vault.upsertGroup(m.room)
-    if (m.room && m.pin && vault && vault.unlocked) applyPinnedRoomEvent(m)
+    if (m.room && m.pin && vault && vault.unlocked) pinnedSync.applyRoomEvent(m)
     // 共享空间广播（随群系统消息同步，仅聊天框展示）：更新本地已知空间/失效缓存快照
     if (m.system && typeof m.system === 'string' && m.system.indexOf('share-') === 0 && m.share && vault && vault.unlocked) {
       try { applyShareBroadcast(m) } catch (e) { logger.log('share', 'apply-broadcast-error', { e: String((e && e.message) || e).slice(0, 120) }) }
@@ -581,7 +587,7 @@ function startP2P () {
     if (!muted && !runtime.dnd && mainWindow) { try { mainWindow.flashFrame(true) } catch (_) {} }
   })
   p2p.on('share', (msg) => { try { onShareSignal(msg) } catch (e) { logger.log('share', 'signal-error', { e: String((e && e.message) || e).slice(0, 120) }) } })
-  p2p.on('pin', (msg) => { try { onPinnedSignal(msg) } catch (e) { logger.log('pin', 'signal-error', { e: String((e && e.message) || e).slice(0, 120) }) } })
+  p2p.on('pin', (msg) => { try { pinnedSync.onSignal(msg) } catch (e) { logger.log('pin', 'signal-error', { e: String((e && e.message) || e).slice(0, 120) }) } })
   p2p.on('ready', (self) => { sendToRenderer('p2p:ready', self); emitPeers() })
   p2p.on('neterror', (e) => { sendToRenderer('p2p:neterror', e); logger.log('net', 'neterror', { e: String(e).slice(0, 200) }) })
   p2p.on('reconnect', (r) => logger.log('net', 'reconnect', { reason: (r && r.reason) || '' }))
@@ -1315,7 +1321,7 @@ ipcMain.handle('msg:pin', (_e, groupId, message) => {
   }
   const res = vault.addPinnedMessage(pin)
   if (!res || !res.ok) return { ok: false, error: (res && res.error) || '置顶失败', max: PINNED_MESSAGE_CAP }
-  emitPinnedMessages()
+  pinnedSync.emitMessages()
   sendToRenderer('msg:pinned', res.pin)
   sendRoomStored(group, currentDisplayName() + '置顶了一条消息', { system: 'message_pinned', pin: { event: 'message_pinned', record: publicPinnedRecord(res.pin) } }, true)
   return { ok: true, pin: res.pin, max: PINNED_MESSAGE_CAP }
@@ -1327,7 +1333,7 @@ ipcMain.handle('msg:unpin', (_e, groupId, pinId) => {
   const group = guard.group
   const res = vault.unpinMessage(groupId, pinId, selfId(), currentDisplayName())
   if (!res || !res.ok) return { ok: false, error: (res && res.error) || '取消置顶失败' }
-  emitPinnedMessages()
+  pinnedSync.emitMessages()
   sendToRenderer('msg:unpinned', res.pin)
   sendRoomStored(group, currentDisplayName() + '取消了一条置顶消息', { system: 'message_unpinned', pin: { event: 'message_unpinned', record: publicPinnedRecord(res.pin) } }, true)
   return { ok: true, pin: res.pin }
@@ -1409,10 +1415,6 @@ function messageMentionsSelf (m) {
   })
 }
 
-function canUseGroupPinnedMessages (group, userId) {
-  return isGroupMember(group, userId)
-}
-
 function pinnedImageThumbnail (m) {
   if (!m || pinnedMessageTypeOf(m) !== 'image') return ''
   try {
@@ -1452,69 +1454,6 @@ function buildPinnedSnapshot (m) {
   }
   if ((type === 'image' || type === 'file') && m.path && fs.existsSync(m.path)) snap.localPath = m.path
   return snap
-}
-
-function emitPinnedMessages () {
-  if (!vault || !vault.unlocked) return
-  sendToRenderer('msg:pinned-list', vault.getPinnedMessagesByGroup())
-}
-
-function applyPinnedRoomEvent (m) {
-  if (!m || !m.room || !m.pin || !vault || !vault.unlocked || !p2p) return
-  if (!canUseGroupPinnedMessages(m.room, selfId()) || !canUseGroupPinnedMessages(m.room, m.from)) return
-  const event = m.pin.event || m.system
-  const record = m.pin.record || m.pin.pin || null
-  if (!record || !record.pinId || !record.groupId) return
-  if (event !== 'message_pinned' && event !== 'message_unpinned') return
-  const res = vault.mergePinnedMessages([record])
-  if (res.changed) {
-    emitPinnedMessages()
-    sendToRenderer(event === 'message_pinned' ? 'msg:pinned' : 'msg:unpinned', record)
-  }
-}
-
-function pinnedGroupIdsForPeer (peerId) {
-  if (!vault || !vault.unlocked || !p2p || !peerId) return []
-  return (vault.getGroups() || [])
-    .filter((g) => canUseGroupPinnedMessages(g, selfId()) && canUseGroupPinnedMessages(g, peerId))
-    .map((g) => g.id)
-}
-
-function requestPinnedListFromPeer (peerId) {
-  if (!p2p || !vault || !vault.unlocked || !peerId || !p2p.reachable(peerId)) return
-  const groupIds = pinnedGroupIdsForPeer(peerId)
-  if (!groupIds.length) return
-  const key = peerId + ':' + groupIds.sort().join(',')
-  const now = Date.now()
-  if (now - (pinnedSyncLastRequest.get(key) || 0) < PINNED_SYNC_THROTTLE_MS) return
-  pinnedSyncLastRequest.set(key, now)
-  p2p.sendPinSignal(peerId, { kind: 'pinned_message_list_request', reqId: 'pinreq:' + crypto.randomUUID(), groupIds, ts: now })
-}
-
-function requestPinnedListsFromPeers (peers) {
-  for (const peer of peers || []) {
-    if (peer && peer.id && peer.online) requestPinnedListFromPeer(peer.id)
-  }
-}
-
-function onPinnedSignal (msg) {
-  if (!msg || !msg.from || !vault || !vault.unlocked || !p2p) return
-  if (msg.kind === 'pinned_message_list_request') {
-    const allowed = new Set(pinnedGroupIdsForPeer(msg.from))
-    const requested = Array.isArray(msg.groupIds) && msg.groupIds.length ? msg.groupIds.filter((id) => allowed.has(id)) : Array.from(allowed)
-    const groups = publicPinnedGroups(vault.getPinnedSyncState(requested))
-    p2p.sendPinSignal(msg.from, { kind: 'pinned_message_list_response', reqId: msg.reqId || ('pinres:' + crypto.randomUUID()), groups, ts: Date.now() })
-    return
-  }
-  if (msg.kind !== 'pinned_message_list_response') return
-  const allowed = new Set(pinnedGroupIdsForPeer(msg.from))
-  const pins = []
-  for (const g of msg.groups || []) {
-    if (!g || !allowed.has(g.groupId)) continue
-    for (const p of g.pins || []) pins.push(p)
-  }
-  const res = vault.mergePinnedMessages(pins)
-  if (res.changed) emitPinnedMessages()
 }
 
 ipcMain.handle('store:addGroupMembers', (_e, groupId, memberIds) => {
