@@ -2931,7 +2931,7 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
       const need = list.length - idx + 5
       if (need > visibleCountRef.current) setVisibleCount(Math.min(list.length, need))
     }
-    setTimeout(() => {
+    setManagedTimeout(() => {
       const sel = (window.CSS && CSS.escape) ? CSS.escape(mid) : String(mid).replace(/"/g, '\\"')
       const el = document.querySelector(`[data-mid="${sel}"]`)
       if (!el) { showChatNotice('没有找到这条消息'); return }
@@ -3198,7 +3198,7 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
   function focusComposer () {
     if (api.win && api.win.focus) api.win.focus()
     ;[0, 60, 180].forEach((delay) => {
-      setTimeout(() => {
+      setManagedTimeout(() => {
         if (!composerRef.current) return
         composerRef.current.focus()
         try { composerRef.current.setSelectionRange(composerRef.current.value.length, composerRef.current.value.length) } catch (_) {}
