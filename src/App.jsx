@@ -166,6 +166,64 @@ function TopBar ({ self, onGlobalSearch }) {
 }
 
 function Center ({ children }) { return <div className="flex-1 flex items-center justify-center p-8">{children}</div> }
+
+// 通用虚拟列表：只渲染视口内的行，上千条名单也不卡。固定行距，但行距(含主题 margin/border)
+// 在运行时从前两行实测，换肤后自动校正——故无需写死高度，也无需第三方库。
+// renderRow(item, index) 须返回带 key 的元素；apiRef.current.scrollToIndex(i) 供未读跳转滚到视口外的目标。
+function VirtualList ({ items, renderRow, empty = null, apiRef = null, overscan = 8, estRow = 56, className = 'flex-1 overflow-auto px-2 pb-2' }) {
+  const scrollRef = useRef(null)
+  const [scrollTop, setScrollTop] = useState(0)
+  const [viewH, setViewH] = useState(600)
+  const [stride, setStride] = useState(estRow)
+  const total = items.length
+
+  // 视口高度：随窗口/侧栏尺寸变化更新
+  useLayoutEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const update = () => setViewH(el.clientHeight || 600)
+    update()
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  // 实测行距：children[0] 是顶部占位，[1]/[2] 为前两行，取 offsetTop 差即真实步长(含 margin)
+  useLayoutEffect(() => {
+    const el = scrollRef.current
+    if (!el || el.children.length < 4) return // 需 顶部占位+≥2行+底部占位 才能确保 [1][2] 都是行
+    const s = el.children[2].offsetTop - el.children[1].offsetTop
+    if (s > 0 && Math.abs(s - stride) > 0.5) setStride(s)
+  })
+
+  // 命令式句柄：按索引滚动(仅在目标不可见时滚动，模拟 block:'nearest')
+  useEffect(() => {
+    if (!apiRef) return
+    apiRef.current = {
+      scrollToIndex (i) {
+        const el = scrollRef.current
+        if (!el || i < 0) return
+        const top = i * stride
+        if (top < el.scrollTop) el.scrollTop = Math.max(0, top - 4)
+        else if (top + stride > el.scrollTop + el.clientHeight) el.scrollTop = top + stride - el.clientHeight + 4
+      },
+    }
+  }, [apiRef, stride])
+
+  if (!total) return <div ref={scrollRef} className={className}>{empty}</div>
+
+  const start = Math.max(0, Math.floor(scrollTop / stride) - overscan)
+  const end = Math.min(total, Math.ceil((scrollTop + viewH) / stride) + overscan)
+  const rows = []
+  for (let i = start; i < end; i++) rows.push(renderRow(items[i], i))
+  return (
+    <div ref={scrollRef} className={className} onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}>
+      <div style={{ height: start * stride }} />
+      {rows}
+      <div style={{ height: Math.max(0, (total - end) * stride) }} />
+    </div>
+  )
+}
 function Badge ({ n, corner, muted }) {
   if (!n) return null
   // corner:瑙掓爣妯″紡,璐村湪头像鍙充笂瑙?muted:免打扰会话用灰色弱化
@@ -2171,7 +2229,7 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
   const peersRef = useRef([]); peersRef.current = peers
   const convosRef = useRef({}); convosRef.current = convos
   const recentRef = useRef({}); recentRef.current = recent
-  const sideItemRefs = useRef({}) // convId -> 列表行 DOM，用于滚动定位
+  const sideListApi = useRef(null) // 侧栏虚拟列表命令式句柄（scrollToIndex），未读跳转用
   const unreadCursorRef = useRef({ tab: null, idx: -1 }) // 双击分页依次聚焦未读会话的游标
   const sideFocusTimerRef = useRef(null)
   const pinnedByGroupRef = useRef({}); pinnedByGroupRef.current = pinnedByGroup
@@ -3471,8 +3529,8 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
     const idx = (start + 1) % unreadItems.length
     const target = unreadItems[idx]
     unreadCursorRef.current = { tab, idx }
-    const el = sideItemRefs.current[target.id]
-    if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    const ti = sideConversations.indexOf(target)
+    if (sideListApi.current && ti >= 0) sideListApi.current.scrollToIndex(ti)
     setSideFocusId(target.id)
     if (sideFocusTimerRef.current) clearManagedTimeout(sideFocusTimerRef.current)
     sideFocusTimerRef.current = setManagedTimeout(() => setSideFocusId(null), 1500)
@@ -3541,15 +3599,17 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
             </div>
           </div>
 
-          <div className="flex-1 overflow-auto px-2 pb-2">
-            {sideConversations.length === 0 && (
+          <VirtualList
+            items={sideConversations}
+            apiRef={sideListApi}
+            empty={(
               <div className="flex flex-col items-center gap-2 px-4 py-8 select-none">
                 <div className="text-2xl float-soft">{sideNeedle ? '搜索' : '空'}</div>
                 <div className="text-xs txt-dim text-center leading-relaxed">{sideNeedle ? `没有找到 "${sideQuery.trim()}"` : '暂无会话或联系人'}</div>
               </div>
             )}
-            {sideConversations.map((item) => (
-              <div key={item.id} ref={(el) => { if (el) sideItemRefs.current[item.id] = el; else delete sideItemRefs.current[item.id] }} onClick={() => selectConv(item.id)} onContextMenu={(e) => { e.preventDefault(); setSideMenu({ x: e.clientX, y: e.clientY, item }) }} className={'side-item w-full flex items-center gap-2.5 px-2.5 py-2 text-sm cursor-pointer ' + (active === item.id ? 'side-item-active' : '') + (sideFocusId === item.id ? ' side-item-flash' : '')}>
+            renderRow={(item) => (
+              <div key={item.id} onClick={() => selectConv(item.id)} onContextMenu={(e) => { e.preventDefault(); setSideMenu({ x: e.clientX, y: e.clientY, item }) }} className={'side-item w-full flex items-center gap-2.5 px-2.5 py-2 text-sm cursor-pointer ' + (active === item.id ? 'side-item-active' : '') + (sideFocusId === item.id ? ' side-item-flash' : '')}>
                 {/* 头像 + 右上角未读角标；点击头像查看对应资料（不切换会话） */}
                 <span
                   className="relative shrink-0 cursor-pointer"
@@ -3590,8 +3650,8 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
                   </span>
                 </span>
               </div>
-            ))}
-          </div>
+            )}
+          />
 
           {/* 底部功能区 */}
           <div className="px-3 py-2.5 border-t bd-soft shrink-0 flex items-center gap-2">
@@ -3682,7 +3742,7 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
               const mergedR = multi ? mergeMessageReactions(sg.units) : undefined
               const onCtx = (mm, e) => { e.preventDefault(); e.stopPropagation(); setCtxMenu({ x: e.clientX, y: e.clientY, m: mm, canRecall: mm.self && !mm.recalled && (Date.now() - mm.ts < 120000) }) }
               return (
-                <div key={sg.key} className={multi ? 'msg-group' : undefined}>
+                <div key={sg.key} className={'msg-cv' + (multi ? ' msg-group' : '')}>
                   {sep && <div className="flex justify-center"><span className="day-sep">{day}</span></div>}
                   {sg.units.map((u, ui) => {
                     const isLastU = ui === sg.units.length - 1
@@ -4124,9 +4184,22 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
               <button onClick={() => setForwardMode('merge')} className={forwardMode === 'merge' ? 'seg-tab seg-tab-active' : 'seg-tab'}>合并转发</button>
             </div>
             <div className="text-[10.5px] txt-dim mb-2">{forwardMode === 'each' ? '逐条发送到目标会话' : '合并为一条聊天记录发送'}</div>
-            {groups.length === 0 && peers.length === 0 && <div className="text-xs txt-dim px-2 py-3">暂无可转发会话</div>}
-            {groups.map((g) => <button key={g.id} onClick={() => doForward(g.id)} className="floating-menu-item"><GroupAvatar group={g} size={20} /> <span className="truncate">{g.name}</span></button>)}
-            {peers.map((p) => <button key={p.id} onClick={() => doForward(p.id)} className="floating-menu-item"><Avatar name={displayNameForPeer(p)} id={p.id} size={20} avatar={p.avatar} /> <span className="truncate">{displayNameForPeer(p)}</span></button>)}
+            {groups.length === 0 && peers.length === 0
+              ? <div className="text-xs txt-dim px-2 py-3">暂无可转发会话</div>
+              : (
+                <VirtualList
+                  items={[...groups.map((g) => ({ kind: 'room', id: g.id, group: g })), ...peers.map((p) => ({ kind: 'peer', id: p.id, peer: p }))]}
+                  estRow={36}
+                  className="floating-dialog-scroll flex-1"
+                  renderRow={(t) => (
+                    <button key={t.id} onClick={() => doForward(t.id)} className="floating-menu-item">
+                      {t.kind === 'room'
+                        ? <><GroupAvatar group={t.group} size={20} /> <span className="truncate">{t.group.name}</span></>
+                        : <><Avatar name={displayNameForPeer(t.peer)} id={t.id} size={20} avatar={t.peer.avatar} /> <span className="truncate">{displayNameForPeer(t.peer)}</span></>}
+                    </button>
+                  )}
+                />
+              )}
           </div>
         </Overlay>
       )}

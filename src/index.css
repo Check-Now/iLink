@@ -625,6 +625,11 @@ body {
 .messages-scroll > div {
   margin-top: 0 !important;
 }
+/* 收口:离屏消息分组由浏览器原生跳过布局/绘制，只渲染视口附近；auto 让其记住真实高度，滚动条不跳动 */
+.msg-cv {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 72px;
+}
 /* 搜索定位:目标消息闪烁高亮 */
 .msg-flash {
   animation: msgFlash 1.8s ease;
