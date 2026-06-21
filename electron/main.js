@@ -780,11 +780,15 @@ function removeLocalGroupData (groupId) {
 // 宿主端：本机持有 ShareStore（磁盘 meta + 物理文件）；成员端：缓存目录快照，离线只读。
 // 控制信令走 p2p.sendShare 加密单播请求/响应；文件内容走 FileTransfer TCP（复用 sha256/.part/续传）。
 const shareHosts = new Map()       // spaceId -> ShareStore（仅本机作为宿主的空间）
-const sharePending = new Map()     // reqId -> { resolve, timer }  控制信令/上传等待响应
 const shareDownloads = new Map()   // transferMid -> { resolve, timer, savePath }  下载等待落地
 const shareEarlyDownloads = new Map() // transferMid -> done info，处理下载完成早于 pending 登记的竞态
 const shareXferMids = new Set()     // 共享空间相关传输 mid，用于单独上报 share:progress 进度
 const SHARE_MAX_BYTES = 5 * 1024 * 1024 * 1024 // 群文件单文件上限 5GB
+const shareSignals = new shareHost.ShareSignalController({
+  getVault: () => vault,
+  getP2P: () => p2p,
+  sendToRenderer,
+})
 function shareOversize (fp) { try { return fs.statSync(fp).size > SHARE_MAX_BYTES } catch (_) { return false } }
 
 function shareDataRoot () { return path.join(resolveDataDir(), 'group_shares') }
@@ -882,43 +886,16 @@ function registerShareDownload (mid, pending) {
 
 // 发起到宿主的控制信令请求并等待响应（带超时）
 function shareRequest (hostId, action, data, timeoutMs) {
-  return new Promise((resolve) => {
-    if (!p2p) return resolve({ ok: false, error: '网络未就绪' })
-    const reqId = crypto.randomUUID()
-    const r = p2p.sendShare(hostId, { kind: 'req', reqId, action, data: data || {} })
-    if (!r.ok) return resolve({ ok: false, error: r.error || '共享主机离线，暂时不可访问' })
-    const timer = setTimeout(() => { sharePending.delete(reqId); resolve({ ok: false, error: '请求超时（共享主机无响应）' }) }, timeoutMs || 8000)
-    sharePending.set(reqId, { resolve, timer })
-  })
+  return shareSignals.request(hostId, action, data, timeoutMs)
 }
 
 // 收到 share 信令：响应→解析挂起请求；请求→本机作为宿主处理
 function onShareSignal (msg) {
-  if (!vault || !vault.unlocked) return
-  if (msg.kind === 'res') {
-    const p = sharePending.get(msg.reqId)
-    if (!p) return
-    clearTimeout(p.timer); sharePending.delete(msg.reqId)
-    p.resolve(msg.data || { ok: false, error: '空响应' })
-    return
-  }
-  // 静默同步：宿主在目录/空间变更后推送，成员同步本地状态并刷新面板，不产生聊天消息、不弹通知
-  if (msg.kind === 'sync') {
-    if (msg.spaceId) {
-      if (msg.op === 'deleted') vault.removeShareSpace(msg.spaceId) // 群文件已被宿主删除 → 本地移除
-      else {
-        vault.clearShareSnapshot(msg.spaceId)
-        const sp = vault.getShareSpace(msg.spaceId) // 更新成员侧文件数/更新时间
-        if (sp && typeof msg.fileCount === 'number') vault.upsertShareSpace({ ...sp, fileCount: msg.fileCount, updatedAt: msg.updatedAt || sp.updatedAt })
-      }
-      sendToRenderer('share:changed', { spaceId: msg.spaceId })
-    }
-    return
-  }
+  if (shareSignals.handleCommonSignal(msg)) return
   if (msg.kind !== 'req') return
   const data = msg.data || {}
   const store = shareHosts.get(data.spaceId)
-  const reply = (d) => { if (p2p) p2p.sendShare(msg.from, { kind: 'res', reqId: msg.reqId, action: msg.action, data: d }) }
+  const reply = (d) => shareSignals.sendResponse(msg.from, msg, d)
   if (!store) return reply({ ok: false, gone: true, error: '群文件不存在或已被删除' })
   const sp = vault.getShareSpace(data.spaceId)
   const group = shareGroup(sp)
@@ -974,16 +951,12 @@ function persistHostSpace (sp) {
 // 宿主目录/空间变更后，向在线群成员单播静默同步信令（best-effort；离线成员下次打开/刷新时自然拉取最新）
 // op: '' 目录变更(失效缓存并刷新) / 'deleted' 群文件已删除(成员本地移除该空间)
 function notifyShareSync (sp, op) {
-  if (!p2p || !sp) return
+  if (!sp) return
   const group = shareGroup(sp)
   if (!group) return
   const store = shareHosts.get(sp.spaceId)
   const info = store ? store.spaceInfo() : null // 随同步带上最新文件数/更新时间，成员据此更新列表
-  const reqId = crypto.randomUUID() // 同一次变更复用一个 reqId，接收端按 reqId 去重避免重复刷新
-  for (const id of groupMembers(group)) {
-    if (id === selfId()) continue
-    p2p.sendShare(id, { kind: 'sync', reqId, spaceId: sp.spaceId, op: op || '', fileCount: info ? info.fileCount : undefined, updatedAt: info ? info.updatedAt : undefined })
-  }
+  shareSignals.notifySync(sp, groupMembers(group).filter((id) => id !== selfId()), info, op)
 }
 
 // 文件传输完成（共享空间）：上传→宿主入库并广播+回执；下载→成员落地
@@ -992,11 +965,11 @@ async function onShareFileDone (info) {
   if (sh.op === 'upload') {
     const store = shareHosts.get(sh.spaceId)
     const sp = vault.getShareSpace(sh.spaceId)
-    if (!store || !sp) { try { fs.unlinkSync(info.tempPath) } catch (_) {} ; if (sh.reqId && p2p) p2p.sendShare(info.from, { kind: 'res', reqId: sh.reqId, action: 'upload', data: { ok: false, error: '群文件不存在' } }); return }
+    if (!store || !sp) { try { fs.unlinkSync(info.tempPath) } catch (_) {} ; if (sh.reqId) shareSignals.sendResponse(info.from, { reqId: sh.reqId, action: 'upload' }, { ok: false, error: '群文件不存在' }); return }
     // hash 复用传输层已校验的 SHA-256，避免对大文件二次同步哈希；落盘异步进行，不阻塞主进程
     const r = await store.placeUpload({ fileName: info.fname, tempPath: info.tempPath, uploadedBy: info.from, parentId: sh.parentId, rename: sh.rename, hash: info.sha256 })
     if (!r.ok) { try { fs.unlinkSync(info.tempPath) } catch (_) {} }
-    if (sh.reqId && p2p) p2p.sendShare(info.from, { kind: 'res', reqId: sh.reqId, action: 'upload', data: r })
+    if (sh.reqId) shareSignals.sendResponse(info.from, { reqId: sh.reqId, action: 'upload' }, r)
     if (r.ok) {
       persistHostSpace(sp)
       logger.log('share', 'upload_file', { spaceId: sp.spaceId, by: info.from, name: r.entry.name })
@@ -1096,10 +1069,9 @@ function shareUploadOne (sp, parentId, filePath, rename) {
     const reqId = crypto.randomUUID()
     const mid = crypto.randomUUID()
     shareXferMids.add(mid) // 标记为共享空间传输，进度走 share:progress
-    const timer = setTimeout(() => { sharePending.delete(reqId); resolve({ ok: false, error: '上传超时' }) }, 30 * 60 * 1000)
-    sharePending.set(reqId, { resolve, timer })
+    shareSignals.waitForResponse(reqId, resolve, 30 * 60 * 1000, { ok: false, error: '上传超时' })
     const r = ft.sendFile(sp.hostUserId, filePath, 'share', mid, sp.spaceId, null, false, mid, Date.now(), { op: 'upload', spaceId: sp.spaceId, groupId: sp.groupId, parentId, reqId, rename: !!rename })
-    if (r && r.error) { clearTimeout(timer); sharePending.delete(reqId); resolve({ ok: false, error: r.error }) }
+    if (r && r.error) { shareSignals.cancel(reqId); resolve({ ok: false, error: r.error }) }
   })
 }
 

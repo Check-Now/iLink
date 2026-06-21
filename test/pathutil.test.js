@@ -40,3 +40,51 @@ test('sharespace-host sanitizes relative paths and reports online state', () => 
   assert.equal(shareHost.isSpaceOnline(space, 'self', [{ id: 'host', online: false }]), false)
   assert.equal(shareHost.shareSpaceView(space, 'host', []).online, true)
 })
+
+test('share signal controller resolves responses and applies sync events', async () => {
+  const sent = []
+  const rendered = []
+  const spaces = new Map([['space-1', { spaceId: 'space-1', fileCount: 0, updatedAt: 1 }]])
+  const cleared = []
+  const vault = {
+    unlocked: true,
+    getShareSpace: (spaceId) => spaces.get(spaceId),
+    upsertShareSpace: (sp) => spaces.set(sp.spaceId, sp),
+    removeShareSpace: (spaceId) => spaces.delete(spaceId),
+    clearShareSnapshot: (spaceId) => cleared.push(spaceId),
+  }
+  const p2p = {
+    sendShare: (peerId, msg) => {
+      sent.push({ peerId, msg })
+      return { ok: true }
+    },
+  }
+  const controller = new shareHost.ShareSignalController({
+    getVault: () => vault,
+    getP2P: () => p2p,
+    sendToRenderer: (channel, payload) => rendered.push({ channel, payload }),
+  })
+
+  const pending = controller.request('host', 'dir_list', { spaceId: 'space-1' })
+  assert.equal(sent[0].peerId, 'host')
+  assert.equal(sent[0].msg.kind, 'req')
+  assert.equal(sent[0].msg.action, 'dir_list')
+
+  assert.equal(controller.handleCommonSignal({ kind: 'res', reqId: sent[0].msg.reqId, data: { ok: true, entries: [] } }), true)
+  assert.deepEqual(await pending, { ok: true, entries: [] })
+
+  assert.equal(controller.handleCommonSignal({ kind: 'sync', spaceId: 'space-1', fileCount: 2, updatedAt: 9 }), true)
+  assert.deepEqual(cleared, ['space-1'])
+  assert.equal(spaces.get('space-1').fileCount, 2)
+  assert.equal(spaces.get('space-1').updatedAt, 9)
+  assert.deepEqual(rendered[0], { channel: 'share:changed', payload: { spaceId: 'space-1' } })
+
+  controller.notifySync({ spaceId: 'space-1' }, ['u1', 'u2'], { fileCount: 2, updatedAt: 9 }, 'deleted')
+  assert.equal(sent.length, 3)
+  assert.equal(sent[1].msg.kind, 'sync')
+  assert.equal(sent[1].msg.op, 'deleted')
+  assert.equal(sent[2].peerId, 'u2')
+
+  assert.equal(controller.handleCommonSignal({ kind: 'sync', spaceId: 'space-1', op: 'deleted' }), true)
+  assert.equal(spaces.has('space-1'), false)
+})
