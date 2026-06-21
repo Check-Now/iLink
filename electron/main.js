@@ -17,6 +17,7 @@ const { makeDotIcon, makeBadgeIcon, makeDndIcon, makeBlankIcon } = require('./ic
 const { PinnedController, pinnedMessageTypeOf, pinnedContentPreview, publicPinnedRecord } = require('./pinned')
 const { createTrayController } = require('./tray')
 const windowLifecycle = require('./window-lifecycle')
+const { imagePreviewDataUrl } = require('./preview')
 const { baseAvatar, avatarCrop, AVATAR_MAX_CHARS } = require('./avatarutil')
 const { Logger } = require('./logger')
 const logger = new Logger()
@@ -608,21 +609,6 @@ function purgeTempImages () {
   } catch (_) {}
 }
 
-// 聊天图片预览：小图(≤PREVIEW_INLINE_MAX)直接内嵌原图；大图生成缩放后的 JPEG 缩略图，避免预览丢失
-const PREVIEW_INLINE_MAX = 2 * 1024 * 1024 // 内嵌原图预览的大小上限(2MB)，超过则改用缩略图
-function imagePreviewDataUrl (fp, mime) {
-  if (!mime || mime.indexOf('image/') !== 0) return null
-  try {
-    const size = fs.statSync(fp).size
-    if (size <= PREVIEW_INLINE_MAX) return 'data:' + mime + ';base64,' + fs.readFileSync(fp).toString('base64')
-    const img = nativeImage.createFromPath(fp)
-    if (!img || img.isEmpty()) return null
-    const dim = img.getSize()
-    const maxW = 480
-    const thumb = dim.width > maxW ? img.resize({ width: maxW, quality: 'good' }) : img
-    return 'data:image/jpeg;base64,' + thumb.toJPEG(72).toString('base64')
-  } catch (_) { return null }
-}
 function buildReceivedMsg (info, destPath) {
   const msg = { mid: info.mid, type: 'file', from: info.from, name: info.name, fname: info.fname, size: info.size, mime: info.mime, scope: info.scope, to: info.to || null, batch: info.batch || null, sticker: !!info.sticker, path: destPath, ts: info.ts || Date.now(), self: false }
   const preview = imagePreviewDataUrl(destPath, info.mime)
