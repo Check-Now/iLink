@@ -625,6 +625,7 @@ body {
   flex-direction: column;
   gap: 14px;
   padding: 20px 24px;
+  scrollbar-gutter: stable;
 }
 .messages-scroll > div {
   margin-top: 0 !important;
@@ -756,6 +757,7 @@ body {
 ::-webkit-scrollbar-thumb:hover { background: rgba(128, 128, 128, 0.45); }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-corner { background: transparent; }
+* { scrollbar-width: thin; scrollbar-color: rgba(128, 128, 128, 0.3) transparent; }
 
 @keyframes freedom-shake {
   0%, 100% { transform: translateX(0); }
@@ -873,7 +875,10 @@ body {
 .pinned-meta-wrap:hover,
 .pinned-meta-wrap:focus {
   background: var(--bubble-other);
-  outline: none;
+}
+.pinned-meta-wrap:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 .pinned-meta-pop {
   position: absolute;
@@ -1339,7 +1344,7 @@ button:hover > .avatar { transform: scale(1.07); }
 
 /* 全局:禁用态指针、键盘焦点描边、文本选区 */
 button:disabled { cursor: not-allowed; }
-:where(button, [role='button'], a):focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+:where(button, [role='button'], a):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; box-shadow: 0 0 0 4px var(--accent-tint); }
 ::selection { background: var(--accent); color: var(--accent-text); }
 
 /* 宽屏阅读体验:1366/1440/1920 下消息列居中收窄,行宽舒适不漂移 */
