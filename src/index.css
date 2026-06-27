@@ -576,9 +576,13 @@ body {
 }
 @media (max-width: 980px) {
   .three-pane-layout {
-    min-width: 925px;
-    grid-template-columns: 220px minmax(480px, 1fr) 2px 220px;
+    min-width: 820px;
+    grid-template-columns: 200px minmax(380px, 1fr) 2px 200px;
     overflow-x: auto;
+  }
+  .two-pane-layout {
+    min-width: 600px;
+    grid-template-columns: 200px minmax(380px, 1fr);
   }
 }
 .sidebar-surface {
@@ -908,6 +912,15 @@ body {
     max-width: calc(100vw - 24px);
     max-height: calc(100vh - 24px);
   }
+  .two-pane-layout {
+    grid-template-columns: 180px 1fr;
+    min-width: 520px;
+  }
+}
+@media (max-width: 600px) {
+  .messages-scroll { padding: 14px 12px; }
+  .messages-scroll .message-stack { max-width: min(88%, 640px); }
+  .composer-box { padding: 10px 12px 12px; }
 }
 
 /* ---------------- 活力化微动效 ---------------- */
