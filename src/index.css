@@ -1113,7 +1113,7 @@ button:hover > .avatar { transform: scale(1.07); }
   --sidebar-bg: #fbfbfc; --chat-bg: #ffffff; --shell-bg: #f5f6f8; --bar-bg: #ffffff;
   --app-bg: #f5f6f8; --surface-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
 }
-[data-style='minimal'] .bubble-self { background: var(--accent); box-shadow: none; }
+[data-style='minimal'] .bubble-self { background: var(--accent); box-shadow: 0 2px 8px rgba(29, 123, 255, 0.22); }
 
 /* 2. 材质设计 Material:紫色主色 + 纸面层级 + 紫色聊天顶栏 */
 [data-style='material'] {
@@ -1130,15 +1130,16 @@ button:hover > .avatar { transform: scale(1.07); }
 [data-style='material'] .chat-header .accent-txt,
 [data-style='material'] .chat-header .icon-btn { color: #fff !important; }
 [data-style='material'] .chat-header svg { color: rgba(255, 255, 255, 0.92); }
+[data-style='material'] .bubble-self { box-shadow: 0 3px 10px rgba(124, 77, 255, 0.32); }
 
 /* 3. 暗黑模式 Dark Mode:纯黑底 + 紫色气泡 */
 [data-style='dark'] {
   --text: #f2f2f7; --text-dim: #9a9aa2;
   --accent: #7c5cff; --accent-soft: #9d83ff; --accent-text: #fff; --accent-tint: rgba(124, 92, 255, 0.18);
-  --panel-rgb: 24, 24, 28; --border-hi: rgba(255, 255, 255, 0.16); --border-soft: rgba(255, 255, 255, 0.1);
-  --bubble-other: #1e1e24; --message-other-bg: #1e1e24; --hover: rgba(255, 255, 255, 0.07); --field: #1e1e24;
-  --sidebar-bg: #0c0c0f; --chat-bg: #060608; --shell-bg: #000000; --bar-bg: #131318;
-  --app-bg: #000000; --surface-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+  --panel-rgb: 30, 30, 36; --border-hi: rgba(255, 255, 255, 0.16); --border-soft: rgba(255, 255, 255, 0.1);
+  --bubble-other: #232329; --message-other-bg: #232329; --hover: rgba(255, 255, 255, 0.07); --field: #1c1c22;
+  --sidebar-bg: #111116; --chat-bg: #0c0c10; --shell-bg: #0d0d12; --bar-bg: #16161c;
+  --app-bg: #0d0d12; --surface-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
 }
 
 /* 4. 拟真风格 Skeuomorphic:皮革顶栏 + 米纸聊天底 + 浅绿气泡 */
@@ -1161,10 +1162,10 @@ button:hover > .avatar { transform: scale(1.07); }
 
 /* 5. 玻璃拟态 Glassmorphism:重度磨砂 + 彩色弥散 */
 [data-style='glass'] {
-  --text: #f6efff; --text-dim: #c5b3e2;
+  --text: #f6efff; --text-dim: #d2c2ea;
   --accent: #a855f7; --accent-soft: #d946ef; --accent-text: #fff; --accent-tint: rgba(192, 132, 252, 0.22);
   --panel-rgb: 52, 36, 84; --border-hi: rgba(255, 255, 255, 0.28); --border-soft: rgba(255, 255, 255, 0.16);
-  --bubble-other: rgba(255, 255, 255, 0.16); --message-other-bg: rgba(255, 255, 255, 0.16);
+  --bubble-other: rgba(255, 255, 255, 0.2); --message-other-bg: rgba(255, 255, 255, 0.2);
   --hover: rgba(255, 255, 255, 0.1); --field: rgba(255, 255, 255, 0.12);
   --sidebar-bg: rgba(34, 24, 58, 0.78); --chat-bg: rgba(24, 16, 44, 0.7); --shell-bg: rgba(34, 24, 58, 0.74); --bar-bg: rgba(48, 32, 80, 0.72);
   --app-bg:
@@ -1220,7 +1221,7 @@ button:hover > .avatar { transform: scale(1.07); }
 
 /* 8. 渐变风格 Gradient:紫粉渐变底 + 半透明气泡 */
 [data-style='gradient'] {
-  --text: #ffffff; --text-dim: rgba(255, 255, 255, 0.68);
+  --text: #ffffff; --text-dim: rgba(255, 255, 255, 0.76);
   --accent: #8b5cf6; --accent-soft: #ec4899; --accent-text: #fff; --accent-tint: rgba(255, 255, 255, 0.18);
   --panel-rgb: 88, 48, 150; --border-hi: rgba(255, 255, 255, 0.3); --border-soft: rgba(255, 255, 255, 0.18);
   --bubble-other: rgba(0, 0, 0, 0.3); --message-other-bg: rgba(0, 0, 0, 0.3);
