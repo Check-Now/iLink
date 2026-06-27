@@ -1,164 +1,185 @@
+<div align="center">
+
 # iLink
 
-> Windows 局域网 P2P 加密通讯工具，支持私聊、群聊、文件传输和绿色版迁移。  
-> A Windows LAN P2P encrypted messenger with private chat, group chat, file transfer, and portable data migration.
+**Private LAN messaging and file transfer for Windows. No server required.**
 
-## 中文
+iLink helps people on the same local network chat, send files, and carry their data with a portable Windows build.
 
-### 简介
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Platform: Windows](https://img.shields.io/badge/Platform-Windows-blue.svg)](#download)
+[![Release](https://img.shields.io/github/v/release/Check-Now/iLink?label=release)](https://github.com/Check-Now/iLink/releases)
 
-iLink 是一个 Windows Electron 桌面应用。它没有中心化聊天服务器，Electron 主进程负责本地存储、局域网发现、P2P 消息和文件传输，React 渲染进程负责界面。
+[Download](#download) · [Features](#features) · [How It Works](#how-it-works) · [Build from Source](#build-from-source) · [简体中文](README.zh-CN.md)
 
-应用数据默认写入本地 `data` 目录；打包后的绿色版会在 `iLink.exe` 同级目录创建 `data`，因此整目录复制到其他电脑或 U 盘后可以继续使用原数据。
+</div>
 
-### 核心功能
+---
 
-- 局域网内 P2P 在线发现
-- 私聊、群聊、消息撤回、离线待发
-- TCP 直连文件传输、断点续传和 SHA-256 校验
-- 主密码加密本地数据，业务数据写入 `data/store.enc`
-- 截图、表情包、托盘通知和本地设置
-- Windows zip 绿色版打包，输出 `release/Freedom.zip`
+## Download
 
-### 技术栈
+The current public build is a portable Windows zip:
 
-- Electron 30, Node.js, Electron IPC
-- React 18, Vite 5, Tailwind CSS
-- UDP 局域网发现，TCP 文件传输
-- scrypt, X25519, HKDF-SHA256, AES-256-GCM
-- Node.js 内置 `node:test`
+[Download Freedom.zip](https://github.com/Check-Now/iLink/releases/download/v0.0.0/Freedom.zip)
 
-### 快速开始
+Use it like a normal portable app:
 
-```powershell
-npm install
-npm run dev
-```
+1. Download `Freedom.zip`.
+2. Extract it anywhere, including a USB drive.
+3. Double-click `iLink.exe`.
+4. Keep the generated `data` folder together with the app if you move it.
 
-第二个本机测试实例使用独立数据目录：
+No installer is required. The packaged app stores its runtime data next to `iLink.exe` in `./data`.
 
-```powershell
-npm run dev:second
-```
+## What Is iLink?
 
-### 构建与打包
+iLink is a Windows desktop app for private communication inside a local network. It is useful when people are in the same office, classroom, lab, home network, or temporary working space and want a simple way to exchange messages and files without setting up a chat server.
 
-```powershell
-npm test
-npm run build
-npm run dist
-```
+It is built as a local-first Electron app:
 
-`npm run dist` 会生成 Windows 绿色版 zip：
-
-```text
-release/Freedom.zip
-```
-
-### 数据目录
-
-- 开发环境：`./data`
-- 第二实例：`./data-2`
-- 打包环境：`iLink.exe` 同级的 `./data`
-
-这些目录包含账号、加密存储和日志，不应提交到 Git。
-
-### 项目结构
-
-```text
-electron/     Electron 主进程、本地存储、P2P、文件传输、托盘等逻辑
-src/          React 渲染进程
-test/         node:test 单元测试
-project_md/   项目上下文和模块文档
-dist/         Vite 构建产物，不提交
-release/      electron-builder 产物，不提交
-data/         本地运行数据，不提交
-```
-
-### 安全说明
-
-iLink 的本地业务数据经过主密码派生密钥加密后写入磁盘。请不要提交 `data/`、`data-2/`、日志、个人账号数据或生产配置。收到可执行文件时，应用会在打开前提示风险。
-
-### 许可证
-
-本项目使用 MIT License，详见 [LICENSE](LICENSE)。
-
-## English
-
-### Overview
-
-iLink is a Windows Electron desktop application. It does not use a central chat server. The Electron main process handles local storage, LAN discovery, P2P messaging, and file transfer, while the React renderer handles the user interface.
-
-Runtime data is stored in the local `data` directory. In the packaged portable build, `data` is created next to `iLink.exe`, so the whole folder can be copied to another PC or USB drive without losing the local account data.
-
-### Features
-
+- no central chat server
+- no cloud account
 - LAN peer discovery
-- Private chat, group chat, message recall, and offline outbox
-- Direct TCP file transfer with resume support and SHA-256 verification
-- Master-password encrypted local storage in `data/store.enc`
-- Screenshot capture, stickers, tray notifications, and local settings
-- Windows portable zip packaging as `release/Freedom.zip`
+- direct encrypted messaging between peers
+- local encrypted storage
+- portable data migration by copying the app folder
 
-### Tech Stack
+## Features
 
-- Electron 30, Node.js, Electron IPC
-- React 18, Vite 5, Tailwind CSS
-- UDP LAN discovery and TCP file transfer
-- scrypt, X25519, HKDF-SHA256, AES-256-GCM
-- Node.js built-in `node:test`
+- **Private chats** for one-to-one conversations on the same LAN.
+- **Group chats** with member management and group messages.
+- **File transfer** over direct TCP connections, with resume support and SHA-256 verification.
+- **Offline outbox** for messages and files that should be retried when a peer comes back online.
+- **Local data vault** encrypted with a master password.
+- **Screenshots, stickers, tray notifications, and local settings** for daily desktop use.
+- **Portable Windows build**: move the app and `data` folder together to keep using the same local account.
 
-### Quick Start
+## How It Works
+
+iLink does not route chat through a hosted service. Each app instance runs its own local backend inside the Electron main process.
+
+```text
+Windows PC A                    Windows PC B
+-----------                     -----------
+iLink.exe                       iLink.exe
+./data                          ./data
+    |                               |
+    |  LAN discovery over UDP       |
+    |<----------------------------->|
+    |  encrypted messages/files     |
+    |<----------------------------->|
+```
+
+The app uses UDP for local peer discovery and direct TCP connections for file transfer. Local business data is saved under `data/`; encrypted chat data is stored in `data/store.enc`.
+
+## Data and Portability
+
+| Environment | Data location |
+| --- | --- |
+| Development | `./data` |
+| Second local test instance | `./data-2` |
+| Packaged app | `./data` next to `iLink.exe` |
+
+To move iLink to another computer or USB drive, copy the whole extracted folder, including `data/`. Do not copy only `iLink.exe`.
+
+## Security Notes
+
+iLink encrypts local business data with a key derived from the master password. P2P messages use X25519 key agreement, HKDF-SHA256, and AES-256-GCM in the current implementation.
+
+Important limits:
+
+- iLink has not received an independent security audit.
+- It is designed for trusted local networks, not anonymous internet messaging.
+- Anyone with access to your `data` folder and master password can open your local account.
+- Do not publish `data/`, `data-2/`, logs, private keys, account files, or production configuration.
+- The app warns before opening received executable files.
+
+## Build from Source
+
+Requirements:
+
+- Windows
+- Node.js and npm
+- Git
+
+Install dependencies and start the development app:
 
 ```powershell
 npm install
 npm run dev
 ```
 
-Run a second local test instance with a separate data directory:
+Run a second local instance for same-machine peer testing:
 
 ```powershell
 npm run dev:second
 ```
 
-### Build and Package
+Run tests and build the app:
 
 ```powershell
 npm test
 npm run build
+```
+
+Create the portable Windows package:
+
+```powershell
 npm run dist
 ```
 
-`npm run dist` creates the Windows portable zip:
+The package is written to:
 
 ```text
 release/Freedom.zip
 ```
 
-### Data Directory
-
-- Development: `./data`
-- Second instance: `./data-2`
-- Packaged app: `./data` next to `iLink.exe`
-
-These folders contain account data, encrypted storage, and logs. They must not be committed to Git.
-
-### Project Structure
+## Project Structure
 
 ```text
-electron/     Electron main process, local storage, P2P, file transfer, tray logic
-src/          React renderer process
-test/         node:test unit tests
-project_md/   Project context and module notes
-dist/         Vite build output, ignored
-release/      electron-builder output, ignored
-data/         Local runtime data, ignored
+electron/      Electron main process: windows, IPC, storage, P2P, file transfer
+src/           React renderer UI
+test/          node:test unit tests
+project_md/    Project notes and module documentation
+build/         Build-only assets such as the packaged app icon
+dist/          Vite output, ignored by Git
+release/       electron-builder output, ignored by Git
+data/          Local runtime data, ignored by Git
 ```
 
-### Security
+## FAQ
 
-iLink encrypts local business data on disk with a key derived from the master password. Do not commit `data/`, `data-2/`, logs, personal account data, or production configuration. The app warns before opening received executable files.
+### Does iLink need the internet?
 
-### License
+No. It is meant for devices on the same local network. Internet access is not required for peer discovery or local file transfer.
 
-This project is released under the MIT License. See [LICENSE](LICENSE).
+### Can I use it across different networks?
+
+Not currently. iLink is designed around LAN discovery and direct local connections.
+
+### Is there a mobile app?
+
+No. The current public build targets Windows desktop.
+
+### Where is my data?
+
+In the `data` folder. In the portable package, it is next to `iLink.exe`.
+
+### Can I delete `data`?
+
+Only if you want to reset the local account and remove local messages, settings, and stored state.
+
+## Roadmap
+
+- Better first-run guidance for non-technical users.
+- More complete Windows multi-machine testing notes.
+- Optional screenshots and a short usage guide.
+- CI once the project settles on a stable release workflow.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Keep changes focused, and run tests before opening a pull request.
+
+## License
+
+iLink is released under the [MIT License](LICENSE).
