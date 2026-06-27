@@ -2,184 +2,184 @@
 
 # iLink
 
-**Private LAN messaging and file transfer for Windows. No server required.**
+**面向 Windows 的局域网私密聊天与文件传输工具，不需要中心服务器。**
 
-iLink helps people on the same local network chat, send files, and carry their data with a portable Windows build.
+iLink 适合办公室、教室、实验室、家庭网络等同一局域网场景，用来聊天、传文件，并通过绿色版随身携带本地数据。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Platform: Windows](https://img.shields.io/badge/Platform-Windows-blue.svg)](#download)
+[![Platform: Windows](https://img.shields.io/badge/Platform-Windows-blue.svg)](#下载)
 [![Release](https://img.shields.io/github/v/release/Check-Now/iLink?label=release)](https://github.com/Check-Now/iLink/releases)
 
-[Download](#download) · [Features](#features) · [How It Works](#how-it-works) · [Build from Source](#build-from-source) · [简体中文](README.zh-CN.md)
+[下载](#下载) · [功能](#功能) · [工作方式](#工作方式) · [从源码构建](#从源码构建) · [English](README.en.md)
 
 </div>
 
 ---
 
-## Download
+## 下载
 
-The current public build is a portable Windows zip:
+当前公开版本是 Windows 绿色版 zip：
 
-[Download Freedom.zip](https://github.com/Check-Now/iLink/releases/download/v0.0.0/Freedom.zip)
+[下载 Freedom.zip](https://github.com/Check-Now/iLink/releases/download/v0.0.0/Freedom.zip)
 
-Use it like a normal portable app:
+使用方式：
 
-1. Download `Freedom.zip`.
-2. Extract it anywhere, including a USB drive.
-3. Double-click `iLink.exe`.
-4. Keep the generated `data` folder together with the app if you move it.
+1. 下载 `Freedom.zip`。
+2. 解压到任意位置，也可以放在 U 盘里。
+3. 双击 `iLink.exe`。
+4. 如果要迁移到另一台电脑，请把整个解压目录一起复制，尤其不要漏掉 `data` 文件夹。
 
-No installer is required. The packaged app stores its runtime data next to `iLink.exe` in `./data`.
+不需要安装程序。打包后的应用会把运行数据写在 `iLink.exe` 同级的 `./data`。
 
-## What Is iLink?
+## iLink 是什么？
 
-iLink is a Windows desktop app for private communication inside a local network. It is useful when people are in the same office, classroom, lab, home network, or temporary working space and want a simple way to exchange messages and files without setting up a chat server.
+iLink 是一个 Windows 桌面应用，用于同一局域网内的私密沟通。它适合不想搭建聊天服务器、又希望在本地网络中快速交换消息和文件的人。
 
-It is built as a local-first Electron app:
+它是一个本地优先的 Electron 应用：
 
-- no central chat server
-- no cloud account
-- LAN peer discovery
-- direct encrypted messaging between peers
-- local encrypted storage
-- portable data migration by copying the app folder
+- 没有中心聊天服务器
+- 不需要云端账号
+- 局域网内自动发现在线设备
+- 设备之间直接加密通信
+- 本地数据加密保存
+- 复制应用目录即可迁移绿色版数据
 
-## Features
+## 功能
 
-- **Private chats** for one-to-one conversations on the same LAN.
-- **Group chats** with member management and group messages.
-- **File transfer** over direct TCP connections, with resume support and SHA-256 verification.
-- **Offline outbox** for messages and files that should be retried when a peer comes back online.
-- **Local data vault** encrypted with a master password.
-- **Screenshots, stickers, tray notifications, and local settings** for daily desktop use.
-- **Portable Windows build**: move the app and `data` folder together to keep using the same local account.
+- **私聊**：在同一局域网内进行一对一聊天。
+- **群聊**：支持群成员管理和群消息。
+- **文件传输**：通过 TCP 直连传输，支持断点续传和 SHA-256 校验。
+- **离线发件箱**：对方重新在线后，待发送消息和文件会继续尝试补发。
+- **本地数据保险箱**：使用主密码加密本地业务数据。
+- **截图、表情包、托盘通知和本地设置**：覆盖日常桌面使用。
+- **Windows 绿色版**：应用目录和 `data` 文件夹一起移动，即可保留同一份本地账号数据。
 
-## How It Works
+## 工作方式
 
-iLink does not route chat through a hosted service. Each app instance runs its own local backend inside the Electron main process.
+iLink 不把聊天内容转发到托管服务器。每个应用实例都在 Electron 主进程里运行自己的本地后端。
 
 ```text
-Windows PC A                    Windows PC B
------------                     -----------
+Windows 电脑 A                  Windows 电脑 B
+-------------                   -------------
 iLink.exe                       iLink.exe
 ./data                          ./data
     |                               |
-    |  LAN discovery over UDP       |
+    |  通过 UDP 做局域网发现        |
     |<----------------------------->|
-    |  encrypted messages/files     |
+    |  直接交换加密消息和文件       |
     |<----------------------------->|
 ```
 
-The app uses UDP for local peer discovery and direct TCP connections for file transfer. Local business data is saved under `data/`; encrypted chat data is stored in `data/store.enc`.
+应用使用 UDP 做局域网发现，使用 TCP 直连传输文件。本地业务数据写入 `data/`，加密聊天数据保存在 `data/store.enc`。
 
-## Data and Portability
+## 数据与迁移
 
-| Environment | Data location |
+| 环境 | 数据位置 |
 | --- | --- |
-| Development | `./data` |
-| Second local test instance | `./data-2` |
-| Packaged app | `./data` next to `iLink.exe` |
+| 开发环境 | `./data` |
+| 第二个本机测试实例 | `./data-2` |
+| 打包后的绿色版 | `iLink.exe` 同级的 `./data` |
 
-To move iLink to another computer or USB drive, copy the whole extracted folder, including `data/`. Do not copy only `iLink.exe`.
+如果要迁移到另一台电脑或 U 盘，请复制整个解压目录，包括 `data/`。只复制 `iLink.exe` 不会带走本地账号和消息数据。
 
-## Security Notes
+## 安全说明
 
-iLink encrypts local business data with a key derived from the master password. P2P messages use X25519 key agreement, HKDF-SHA256, and AES-256-GCM in the current implementation.
+iLink 会用主密码派生出的密钥加密本地业务数据。当前实现中的 P2P 消息使用 X25519、HKDF-SHA256 和 AES-256-GCM。
 
-Important limits:
+需要明确的边界：
 
-- iLink has not received an independent security audit.
-- It is designed for trusted local networks, not anonymous internet messaging.
-- Anyone with access to your `data` folder and master password can open your local account.
-- Do not publish `data/`, `data-2/`, logs, private keys, account files, or production configuration.
-- The app warns before opening received executable files.
+- iLink 尚未经过第三方安全审计。
+- 它面向可信局域网，不是匿名互联网聊天工具。
+- 拿到 `data` 文件夹并知道主密码的人，可以打开本地账号数据。
+- 不要公开提交 `data/`、`data-2/`、日志、私钥、账号文件或生产配置。
+- 收到可执行文件时，应用会在打开前提示风险。
 
-## Build from Source
+## 从源码构建
 
-Requirements:
+要求：
 
 - Windows
-- Node.js and npm
+- Node.js 和 npm
 - Git
 
-Install dependencies and start the development app:
+安装依赖并启动开发环境：
 
 ```powershell
 npm install
 npm run dev
 ```
 
-Run a second local instance for same-machine peer testing:
+启动第二个本机实例，用于在同一台电脑上模拟两个节点：
 
 ```powershell
 npm run dev:second
 ```
 
-Run tests and build the app:
+运行测试和构建：
 
 ```powershell
 npm test
 npm run build
 ```
 
-Create the portable Windows package:
+生成 Windows 绿色版：
 
 ```powershell
 npm run dist
 ```
 
-The package is written to:
+产物位置：
 
 ```text
 release/Freedom.zip
 ```
 
-## Project Structure
+## 项目结构
 
 ```text
-electron/      Electron main process: windows, IPC, storage, P2P, file transfer
-src/           React renderer UI
-test/          node:test unit tests
-project_md/    Project notes and module documentation
-build/         Build-only assets such as the packaged app icon
-dist/          Vite output, ignored by Git
-release/       electron-builder output, ignored by Git
-data/          Local runtime data, ignored by Git
+electron/      Electron 主进程：窗口、IPC、本地存储、P2P、文件传输
+src/           React 渲染进程界面
+test/          node:test 单元测试
+project_md/    项目说明和模块文档
+build/         构建用资源，例如打包图标
+dist/          Vite 构建产物，不提交到 Git
+release/       electron-builder 产物，不提交到 Git
+data/          本地运行数据，不提交到 Git
 ```
 
-## FAQ
+## 常见问题
 
-### Does iLink need the internet?
+### iLink 需要互联网吗？
 
-No. It is meant for devices on the same local network. Internet access is not required for peer discovery or local file transfer.
+不需要。它面向同一局域网内的设备，发现设备和传输文件都不依赖互联网。
 
-### Can I use it across different networks?
+### 可以跨不同网络使用吗？
 
-Not currently. iLink is designed around LAN discovery and direct local connections.
+当前不支持。iLink 的设计基于局域网发现和本地直连。
 
-### Is there a mobile app?
+### 有手机端吗？
 
-No. The current public build targets Windows desktop.
+没有。当前公开版本面向 Windows 桌面端。
 
-### Where is my data?
+### 我的数据在哪里？
 
-In the `data` folder. In the portable package, it is next to `iLink.exe`.
+在 `data` 文件夹里。绿色版中，它位于 `iLink.exe` 同级目录。
 
-### Can I delete `data`?
+### 可以删除 `data` 吗？
 
-Only if you want to reset the local account and remove local messages, settings, and stored state.
+只有在你想重置本地账号，并删除本地消息、设置和状态时才应该删除。
 
-## Roadmap
+## 路线图
 
-- Better first-run guidance for non-technical users.
-- More complete Windows multi-machine testing notes.
-- Optional screenshots and a short usage guide.
-- CI once the project settles on a stable release workflow.
+- 面向普通用户的新手引导。
+- 更完整的 Windows 多机测试说明。
+- 真实截图和简短使用指南。
+- 在发布流程稳定后补充 CI。
 
-## Contributing
+## 贡献
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Keep changes focused, and run tests before opening a pull request.
+见 [CONTRIBUTING.md](CONTRIBUTING.md)。请保持改动聚焦，提交前先运行测试。
 
-## License
+## 许可证
 
-iLink is released under the [MIT License](LICENSE).
+iLink 使用 [MIT License](LICENSE)。
