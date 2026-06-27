@@ -227,7 +227,7 @@ body {
   align-items: center;
   gap: 8px;
   padding: 6px 8px;
-  border-radius: 9px;
+  border-radius: 8px;
   color: var(--text);
   font-size: 13px;
   line-height: 1.25;
@@ -493,7 +493,7 @@ body {
   background: var(--field);
   border: 1px solid var(--border-soft);
   color: var(--text);
-  border-radius: 11px;
+  border-radius: 10px;
   box-shadow: none;
   transition: border-color 0.18s var(--ease), box-shadow 0.18s var(--ease), background 0.18s ease;
 }
@@ -708,7 +708,7 @@ body {
 }
 .composer-send {
   min-height: 38px;
-  border-radius: 11px;
+  border-radius: 10px;
   padding: 0 13px;
   box-shadow: 0 4px 12px rgba(79, 91, 213, 0.35);
   flex-shrink: 0;
@@ -822,7 +822,7 @@ body {
 .pinned-thumb-compact {
   width: 34px;
   height: 34px;
-  border-radius: 7px;
+  border-radius: 8px;
 }
 .pinned-file-card {
   width: 150px;
@@ -838,7 +838,7 @@ body {
 }
 .pinned-file-chip {
   min-width: 0;
-  border-radius: 7px;
+  border-radius: 8px;
   padding: 6px 8px;
   border: 1px solid var(--border-soft);
   background: var(--bubble-other);
@@ -859,7 +859,7 @@ body {
   position: relative;
   width: 24px;
   height: 24px;
-  border-radius: 7px;
+  border-radius: 8px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1381,7 +1381,7 @@ button:disabled { cursor: not-allowed; }
 .composer-hint { display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; color: var(--text-dim); }
 .composer-hint kbd {
   font-family: inherit; font-size: 10px; line-height: 1;
-  padding: 3px 5px; border-radius: 5px;
+  padding: 3px 5px; border-radius: 6px;
   background: var(--hover); border: 1px solid var(--border-soft);
   color: var(--text-dim);
 }
