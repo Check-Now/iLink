@@ -115,9 +115,9 @@ const CHAT_FONTS = [
   { label: '仿宋', family: 'FangSong, serif' },
 ]
 
-// 聊天 UI 风格：仅换肤，不改排版。colors 用于预览；classic 为经典样式。
+// 聊天 UI 风格：2026 主流十种皮肤,仅换肤不改排版。colors 用于预览。
+// 内部默认/登录页仍用 classic(:root 靛蓝基底),不在此列表展示。
 const UI_STYLES = [
-  { key: 'classic', label: '经典', colors: ['#7c86f0', '#1a1c28'] },
   { key: 'minimal', label: '极简', colors: ['#1d7bff', '#ffffff'] },
   { key: 'material', label: '材料', colors: ['#7c4dff', '#fafafa'] },
   { key: 'dark', label: '暗色', colors: ['#7c5cff', '#0a0a0c'] },
@@ -126,8 +126,8 @@ const UI_STYLES = [
   { key: 'flat', label: '扁平', colors: ['#00897b', '#ffffff'] },
   { key: 'neu', label: '柔和', colors: ['#5b7cfa', '#e6e9f0'] },
   { key: 'gradient', label: '渐变', colors: ['#8b5cf6', '#f649a7'] },
-  { key: 'card', label: '卡片', colors: ['#1d7bff', '#e9ecf1'] },
-  { key: 'hand', label: '手绘', colors: ['#2b2b2b', '#fdf6e3'] },
+  { key: 'bento', label: '便当', colors: ['#6366f1', '#e6eaf2'] },
+  { key: 'brutal', label: '野兽派', colors: ['#2563eb', '#ffd84d'] },
 ]
 
 function WinBtns () {
@@ -346,21 +346,26 @@ function fmtEta (sec) {
   return '剩余 ' + Math.ceil(sec / 3600) + ' 小时'
 }
 
-function FileMsg ({ m, progress, onAccept, onReject, onCancel, onRetry, selfAvatar, peerAvatar, avatarSpacer, hideMeta, metaReactions }) {
+// 头像元素：对方消息时把发送者名字显示在头像上方（私聊/群聊一致；自己的消息不显示名字）
+function MsgAvatar ({ spacer, self, name, id, avatar, peerName }) {
+  if (spacer) return <span className="avatar-spacer" />
+  const av = <Avatar name={self ? '?' : (name || '')} id={self ? (id || 'self') : (id || name || '')} avatar={avatar} size={34} />
+  if (self || !peerName) return av
+  return <div className="avatar-col"><span className="avatar-name" title={peerName}>{peerName}</span>{av}</div>
+}
+
+function FileMsg ({ m, progress, onAccept, onReject, onCancel, onRetry, selfAvatar, peerAvatar, avatarSpacer, hideMeta, metaReactions, peerName }) {
   const isImg = m.mime && m.mime.indexOf('image/') === 0
   const offer = m.type === 'file-offer'
   const pct = progress && progress.size ? Math.min(100, Math.round((progress.received / progress.size) * 100)) : null
-  const avatarName = m.self ? '?' : (m.name || '')
-  const avatarId = m.self ? (m.from || 'self') : (m.from || m.name || '')
   const avatarData = m.self ? selfAvatar : (peerAvatar || m.avatar)
   const rx = metaReactions !== undefined ? metaReactions : (m.reactions || {})
-  const avEl = avatarSpacer ? <span className="avatar-spacer" /> : <Avatar name={avatarName} id={avatarId} avatar={avatarData} size={34} />
+  const avEl = <MsgAvatar spacer={avatarSpacer} self={m.self} name={m.name} id={m.from} avatar={avatarData} peerName={peerName} />
   return (
     <div className={'group message-row ' + (m.self ? 'message-row-self' : 'message-row-other')}>
       {!m.self && avEl}
       <div className="message-stack max-w-[75%]">
         <div className={'rounded-2xl px-3 py-2 text-sm ' + (m.self ? 'bubble-self' : 'bubble-other')}>
-        {(m.scope === 'group' || m.scope === 'room') && !m.self && m.name && <div className="text-[11px] font-medium accent-txt mb-0.5">{m.name}</div>}
         {isImg && m.dataUrl ? (
           <StaticImg src={m.dataUrl} alt={m.fname} onClick={() => !m.sticker && m.path && api.file.open(m.path)} className={'rounded-lg max-w-[240px] max-h-60 object-contain' + (m.sticker ? '' : ' cursor-pointer')} />
         ) : (
@@ -391,15 +396,13 @@ function FileMsg ({ m, progress, onAccept, onReject, onCancel, onRetry, selfAvat
   )
 }
 
-function BatchMsg ({ items, markdown, showName, selfAvatar, peerAvatar, progressMap, flashMid, onCtx, avatarSpacer, hideMeta, metaReactions, mentionNames }) {
+function BatchMsg ({ items, markdown, selfAvatar, peerAvatar, progressMap, flashMid, onCtx, avatarSpacer, hideMeta, metaReactions, mentionNames, peerName }) {
   const first = items[0]
   const selfMsg = !!first.self
   const texts = items.filter((x) => x.type !== 'file' && x.type !== 'file-offer' && x.text)
   const allFiles = items.filter((x) => x.type === 'file')
   const imgs = allFiles.filter((f) => f.mime && f.mime.indexOf('image/') === 0 && f.dataUrl)
   const others = allFiles.filter((f) => !(f.mime && f.mime.indexOf('image/') === 0 && f.dataUrl))
-  const avatarName = selfMsg ? '?' : (first.name || '')
-  const avatarId = selfMsg ? (first.from || 'self') : (first.from || first.name || '')
   const avatarData = selfMsg ? selfAvatar : (peerAvatar || first.avatar)
   // 合并所有条目的表情回应，外部传入 metaReactions 时优先使用
   let reactions = {}
@@ -412,13 +415,12 @@ function BatchMsg ({ items, markdown, showName, selfAvatar, peerAvatar, progress
     }
   }
   const ctxProps = (m) => ({ 'data-mid': m.mid || undefined, onContextMenu: (e) => onCtx && onCtx(m, e) })
-  const avEl = avatarSpacer ? <span className="avatar-spacer" /> : <Avatar name={avatarName} id={avatarId} avatar={avatarData} size={34} />
+  const avEl = <MsgAvatar spacer={avatarSpacer} self={selfMsg} name={first.name} id={first.from} avatar={avatarData} peerName={peerName} />
   return (
     <div className={'message-row ' + (selfMsg ? 'message-row-self' : 'message-row-other')}>
       {!selfMsg && avEl}
       <div className="message-stack max-w-[75%]">
         {/* 无文字时，群内昵称单独显示在附件上方 */}
-        {showName && texts.length === 0 && <div className="text-[11px] font-medium accent-txt">{first.name}</div>}
         {/* 绗竴琛?图片缂╃暐鍥?*/}
         {imgs.length > 0 && (
           <div className="batch-grid batch-grid-bare">
@@ -449,7 +451,6 @@ function BatchMsg ({ items, markdown, showName, selfAvatar, peerAvatar, progress
         {/* 聊天气泡：只放文字消息 */}
         {texts.length > 0 && (
           <div className={'rounded-2xl px-3 py-2 text-sm ' + (selfMsg ? 'bubble-self' : 'bubble-other')}>
-            {showName && <div className="text-[11px] font-medium accent-txt mb-0.5">{first.name}</div>}
             {texts.map((t) => (
               <div key={t.mid} {...ctxProps(t)} className={'whitespace-pre-wrap break-words ' + (flashMid === t.mid ? 'msg-flash' : '')}>{renderRich(t.text || '', markdown, mentionNames)}</div>
             ))}
@@ -576,23 +577,20 @@ function MsgStatus ({ m, onRetry }) {
   return null
 }
 
-function Bubble ({ m, now, showName, markdown, selectMode, selected, onToggleSelect, selfAvatar, peerAvatar, avatarSpacer, hideMeta, metaReactions, onRetry, mentionNames }) {
+function Bubble ({ m, now, markdown, selectMode, selected, onToggleSelect, selfAvatar, peerAvatar, avatarSpacer, hideMeta, metaReactions, onRetry, mentionNames, peerName }) {
   // 阅后即焚：剩余时间占比(0~1)，用于进度条展示
   const burnTotal = (m.ttl || 10) * 1000
   const burnFrac = m.burn ? Math.max(0, Math.min(1, (m.ts + burnTotal - now) / burnTotal)) : 0
   const cls = m.burn ? 'bubble-burn' : (m.self ? 'bubble-self' : 'bubble-other')
-  const avatarName = m.self ? '?' : (m.name || '')
-  const avatarId = m.self ? (m.from || 'self') : (m.from || m.name || '')
   const avatarData = m.self ? selfAvatar : (peerAvatar || m.avatar)
   const rx = metaReactions !== undefined ? metaReactions : (m.reactions || {})
-  const avEl = avatarSpacer ? <span className="avatar-spacer" /> : <Avatar name={avatarName} id={avatarId} avatar={avatarData} size={34} />
+  const avEl = <MsgAvatar spacer={avatarSpacer} self={m.self} name={m.name} id={m.from} avatar={avatarData} peerName={peerName} />
   return (
     <div className={'group message-row ' + (m.self ? 'message-row-self' : 'message-row-other')}>
       {selectMode && <input type="checkbox" checked={!!selected} onChange={() => onToggleSelect(m.mid)} className="accent-emerald-500" />}
       {!m.self && avEl}
       <div className="message-stack max-w-[75%]">
       <div className={'rounded-2xl px-3 py-2 text-sm ' + cls}>
-        {showName && <div className="text-[11px] font-medium accent-txt mb-0.5">{m.name}</div>}
         {m.fwd && <div className="text-[10.5px] opacity-75 mb-0.5 inline-flex items-center gap-1"><Forward size={10} /> 转发自 {localizeKnownNamesText(m.fwd.name, mentionNames)}{m.fwd.count ? `（共 ${m.fwd.count} 条）` : ''}</div>}
         {m.reply && <div className="mb-1 px-2 py-1 rounded-lg text-[11px] opacity-80" style={{ borderLeft: '2px solid var(--accent)', background: 'rgba(0,0,0,0.12)' }}><span className="font-medium">{localizeKnownNamesText(m.reply.name, mentionNames)}</span>:{localizeMentionsText(m.reply.text, mentionNames)}</div>}
         <div className="whitespace-pre-wrap break-words">{m.recalled ? <span className="italic opacity-60">[已撤回]</span> : renderRich(m.text || '', markdown, mentionNames)}</div>
@@ -613,20 +611,17 @@ function Bubble ({ m, now, showName, markdown, selectMode, selected, onToggleSel
   )
 }
 
-function ShareEntryMsg ({ m, showName, onOpen, selfAvatar, peerAvatar, avatarSpacer, hideMeta, metaReactions, onRetry }) {
+function ShareEntryMsg ({ m, onOpen, selfAvatar, peerAvatar, avatarSpacer, hideMeta, metaReactions, onRetry, peerName }) {
   const sh = m.share || {}
   const isFolder = sh.entryType === 'folder'
-  const avatarName = m.self ? '?' : (m.name || '')
-  const avatarId = m.self ? (m.from || 'self') : (m.from || m.name || '')
   const avatarData = m.self ? selfAvatar : (peerAvatar || m.avatar)
   const rx = metaReactions !== undefined ? metaReactions : (m.reactions || {})
-  const avEl = avatarSpacer ? <span className="avatar-spacer" /> : <Avatar name={avatarName} id={avatarId} avatar={avatarData} size={34} />
+  const avEl = <MsgAvatar spacer={avatarSpacer} self={m.self} name={m.name} id={m.from} avatar={avatarData} peerName={peerName} />
   const path = (sh.breadcrumb || []).map((x) => x && x.name).filter(Boolean).join(' / ')
   return (
     <div className={'group message-row ' + (m.self ? 'message-row-self' : 'message-row-other')}>
       {!m.self && avEl}
       <div className="message-stack max-w-[75%]">
-        {showName && <div className="text-[11px] font-medium accent-txt">{m.name}</div>}
         <button type="button" onClick={() => onOpen && onOpen(sh)} className={'share-entry-card ' + (m.self ? 'share-entry-card-self' : '')} title="打开群空间对应位置">
           <span className="share-entry-icon">{isFolder ? <Folder size={18} /> : <FileIcon size={18} />}</span>
           <span className="min-w-0 flex-1 text-left">
@@ -3737,6 +3732,7 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
             )}
             {senderGroups.map((sg) => {
               const firstMsg = sg.units[0].items[0]
+              const peerName = sg.self ? '' : displayNameForId(firstMsg.from, firstMsg.name || '')
               const day = dayLabel(firstMsg.ts); const sep = day !== lastDay; lastDay = day
               const multi = sg.units.length > 1
               const mergedR = multi ? mergeMessageReactions(sg.units) : undefined
@@ -3759,7 +3755,7 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
                           <BatchMsg
                             items={u.items}
                             markdown={!!settings.markdown}
-                            showName={isRoom && !sg.self && ui === 0}
+                            peerName={peerName}
                             selfAvatar={settings.avatar}
                             peerAvatar={messageAvatar(m)}
                             progressMap={fileProgress}
@@ -3791,10 +3787,10 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
                               </div>
                               )
                             : (m.share && m.share.type === 'share-entry'
-                                ? <ShareEntryMsg m={m} showName={isRoom && !m.self && ui === 0} onOpen={openSharedEntry} selfAvatar={settings.avatar} peerAvatar={messageAvatar(m)} onRetry={retryMessage} {...shared} />
+                                ? <ShareEntryMsg m={m} peerName={peerName} onOpen={openSharedEntry} selfAvatar={settings.avatar} peerAvatar={messageAvatar(m)} onRetry={retryMessage} {...shared} />
                                 : ((m.type === 'file' || m.type === 'file-offer')
-                                    ? <FileMsg m={m} progress={fileProgress[m.mid]} onAccept={acceptFile} onReject={rejectFile} onCancel={cancelFile} onRetry={retryFile} selfAvatar={settings.avatar} peerAvatar={messageAvatar(m)} {...shared} />
-                                    : <Bubble m={m} now={now} showName={isRoom && !m.self && ui === 0} markdown={!!settings.markdown} selectMode={selectMode} selected={!!selected[m.mid]} onToggleSelect={toggleSelect} selfAvatar={settings.avatar} peerAvatar={messageAvatar(m)} onRetry={retryMessage} mentionNames={mentionNameMap} {...shared} />))}
+                                    ? <FileMsg m={m} progress={fileProgress[m.mid]} onAccept={acceptFile} onReject={rejectFile} onCancel={cancelFile} onRetry={retryFile} selfAvatar={settings.avatar} peerAvatar={messageAvatar(m)} peerName={peerName} {...shared} />
+                                    : <Bubble m={m} now={now} peerName={peerName} markdown={!!settings.markdown} selectMode={selectMode} selected={!!selected[m.mid]} onToggleSelect={toggleSelect} selfAvatar={settings.avatar} peerAvatar={messageAvatar(m)} onRetry={retryMessage} mentionNames={mentionNameMap} {...shared} />))}
                       </div>
                     )
                   })}

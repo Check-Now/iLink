@@ -343,9 +343,8 @@ body {
   text-decoration: underline;
   text-underline-offset: 2px;
 }
-/* 拟真/手绘的自己气泡是浅色深字:提及用深色胶囊 */
-[data-style='skeuo'] .bubble-self .mention,
-[data-style='hand'] .bubble-self .mention {
+/* 拟真的自己气泡是浅色深字:提及用深色胶囊 */
+[data-style='skeuo'] .bubble-self .mention {
   background: rgba(0, 0, 0, 0.1);
   color: inherit;
 }
@@ -1238,35 +1237,40 @@ button:hover > .avatar { transform: scale(1.07); }
 [data-style='gradient'] .composer-surface,
 [data-style='gradient'] .pane-header { backdrop-filter: blur(22px) saturate(1.2); }
 
-/* 9. 卡片式设计 Card-based:浅灰底 + 白色卡片气泡 */
-[data-style='card'] {
-  --text: #1f2430; --text-dim: #606878;
-  --accent: #1d7bff; --accent-soft: #4a95ff; --accent-text: #fff; --accent-tint: rgba(29, 123, 255, 0.1);
-  --panel-rgb: 255, 255, 255; --border-hi: rgba(0, 0, 0, 0.12); --border-soft: rgba(0, 0, 0, 0.08);
+/* 9. 便当格 Bento:浅灰底 + 大圆角白卡 + 柔和层叠阴影(2026 主流,Apple/Google 官网在用) */
+[data-style='bento'] {
+  --text: #1b1f2a; --text-dim: #5b6373;
+  --accent: #6366f1; --accent-soft: #818cf8; --accent-text: #fff; --accent-tint: rgba(99, 102, 241, 0.1);
+  --panel-rgb: 255, 255, 255; --border-hi: rgba(0, 0, 0, 0.1); --border-soft: rgba(0, 0, 0, 0.06);
   --bubble-other: #ffffff; --message-other-bg: #ffffff; --hover: rgba(0, 0, 0, 0.04); --field: #ffffff;
-  --sidebar-bg: #f4f6f8; --chat-bg: #eef0f4; --shell-bg: #e9ecf1; --bar-bg: #ffffff;
-  --app-bg: #e9ecf1; --surface-shadow: 0 2px 8px rgba(20, 30, 60, 0.08);
+  --sidebar-bg: #eef1f6; --chat-bg: #f4f6fa; --shell-bg: #e6eaf2; --bar-bg: #ffffff;
+  --app-bg: #e6eaf2; --surface-shadow: 0 4px 16px rgba(20, 30, 60, 0.08);
 }
-[data-style='card'] .bubble-other { border: 1px solid var(--border-soft); box-shadow: var(--surface-shadow); }
-[data-style='card'] .bubble-self { box-shadow: 0 2px 8px rgba(29, 123, 255, 0.3); }
+[data-style='bento'] .bubble-self,
+[data-style='bento'] .bubble-other { border-radius: 16px; }
+[data-style='bento'] .bubble-other { border: 1px solid var(--border-soft); box-shadow: var(--surface-shadow); }
+[data-style='bento'] .bubble-self { box-shadow: 0 4px 16px rgba(99, 102, 241, 0.28); }
 
-/* 10. 手绘风格 Hand-drawn:米纸底 + 黑描边气泡 + 手写字体 */
-[data-style='hand'] {
-  --text: #2b2b2b; --text-dim: #6b6054;
-  --accent: #4a7c43; --accent-soft: #6b9a62; --accent-text: #fff; --accent-tint: rgba(74, 124, 67, 0.14);
-  --panel-rgb: 253, 248, 234; --border-hi: rgba(43, 43, 43, 0.5); --border-soft: rgba(43, 43, 43, 0.3);
-  --bubble-other: #ffffff; --message-other-bg: #ffffff; --hover: rgba(43, 43, 43, 0.06); --field: #fffdf4;
-  --sidebar-bg: #f9f1dd; --chat-bg: #fdf6e3; --shell-bg: #f3ead2; --bar-bg: #f9f1dd;
-  --app-bg: #f3ead2; --surface-shadow: none;
+/* 10. 新野兽派 Neobrutalism:撞色块 + 2px 黑描边 + 硬投影,2026 上升最快 */
+[data-style='brutal'] {
+  --text: #16181d; --text-dim: #4a4d57;
+  --accent: #2563eb; --accent-soft: #3b82f6; --accent-text: #fff; --accent-tint: rgba(37, 99, 235, 0.14);
+  --panel-rgb: 255, 255, 255; --border-hi: #16181d; --border-soft: rgba(22, 24, 29, 0.55);
+  --bubble-other: #ffffff; --message-other-bg: #ffffff; --hover: rgba(22, 24, 29, 0.06); --field: #fffce8;
+  --sidebar-bg: #ffd84d; --chat-bg: #f5f3e8; --shell-bg: #ffffff; --bar-bg: #b9f0d8;
+  --app-bg: #f5f3e8; --surface-shadow: 3px 3px 0 #16181d;
 }
-[data-style='hand'] .app-shell { font-family: 'Segoe Print', 'Comic Sans MS', 'KaiTi', cursive; }
-[data-style='hand'] .bubble-self { background: #dff3d3; color: #243b22; }
-[data-style='hand'] .bubble-self,
-[data-style='hand'] .bubble-other,
-[data-style='hand'] .composer-input-wrap,
-[data-style='hand'] .system-msg,
-[data-style='hand'] .day-sep { border: 2px solid #2b2b2b !important; box-shadow: none; }
-[data-style='hand'] .avatar { border: 2px solid #2b2b2b; }
+[data-style='brutal'] .bubble-self,
+[data-style='brutal'] .bubble-other,
+[data-style='brutal'] .composer-input-wrap,
+[data-style='brutal'] .system-msg,
+[data-style='brutal'] .day-sep,
+[data-style='brutal'] .field { border: 2px solid #16181d !important; box-shadow: 3px 3px 0 #16181d; }
+[data-style='brutal'] .bubble-self { background: var(--accent); color: #fff; border-radius: 10px; }
+[data-style='brutal'] .bubble-other { border-radius: 10px; }
+[data-style='brutal'] .btn-primary,
+[data-style='brutal'] .composer-send { border: 2px solid #16181d; box-shadow: 3px 3px 0 #16181d; }
+[data-style='brutal'] .avatar { border: 2px solid #16181d; }
 
 /* ============ 风格化:左侧会话卡片(让切换风格在好友列表上立竿见影) ============ */
 
@@ -1305,17 +1309,17 @@ button:hover > .avatar { transform: scale(1.07); }
 [data-style='gradient'] .sidebar-surface .side-item { margin-bottom: 7px; border-radius: 12px; }
 [data-style='gradient'] .sidebar-surface .side-item:not(.side-item-active):hover { background: rgba(255, 255, 255, 0.22); }
 
-/* 卡片式 / 材质 / 极简:白色卡片 + 各自层级阴影(仅未选中项) */
-[data-style='card'] .sidebar-surface .side-item:not(.side-item-active),
+/* 便当格 / 材质 / 极简:白色卡片 + 各自层级阴影(仅未选中项) */
+[data-style='bento'] .sidebar-surface .side-item:not(.side-item-active),
 [data-style='material'] .sidebar-surface .side-item:not(.side-item-active),
 [data-style='minimal'] .sidebar-surface .side-item:not(.side-item-active) {
   background: rgb(var(--panel-rgb));
   border: 1px solid var(--border-soft);
   box-shadow: var(--surface-shadow);
 }
-[data-style='card'] .sidebar-surface .side-item,
 [data-style='material'] .sidebar-surface .side-item,
 [data-style='minimal'] .sidebar-surface .side-item { margin-bottom: 7px; border-radius: 12px; }
+[data-style='bento'] .sidebar-surface .side-item { margin-bottom: 8px; border-radius: 16px; }
 
 /* 拟真:米白纸面卡(仅未选中项) */
 [data-style='skeuo'] .sidebar-surface .side-item:not(.side-item-active) {
@@ -1325,14 +1329,15 @@ button:hover > .avatar { transform: scale(1.07); }
 }
 [data-style='skeuo'] .sidebar-surface .side-item { margin-bottom: 8px; border-radius: 10px; }
 
-/* 手绘:白卡黑描边,选中为主题绿底 */
-[data-style='hand'] .sidebar-surface .side-item:not(.side-item-active) {
+/* 新野兽派:白卡 2px 黑描边 + 硬投影,选中为撞色块描边 */
+[data-style='brutal'] .sidebar-surface .side-item:not(.side-item-active) {
   background: #fff;
-  border: 2px solid #2b2b2b;
+  border: 2px solid #16181d;
+  box-shadow: 3px 3px 0 #16181d;
 }
-[data-style='hand'] .sidebar-surface .side-item { margin-bottom: 9px; border-radius: 12px; }
-[data-style='hand'] .sidebar-surface .side-item-active,
-[data-style='hand'] .sidebar-surface .side-item-active:hover { background: var(--accent); border: 2px solid #2b2b2b; }
+[data-style='brutal'] .sidebar-surface .side-item { margin-bottom: 10px; border-radius: 10px; }
+[data-style='brutal'] .sidebar-surface .side-item-active,
+[data-style='brutal'] .sidebar-surface .side-item-active:hover { background: var(--accent); border: 2px solid #16181d; box-shadow: 3px 3px 0 #16181d; }
 
 /* 暗黑:深灰实底卡(仅未选中项) */
 [data-style='dark'] .sidebar-surface .side-item:not(.side-item-active) {
