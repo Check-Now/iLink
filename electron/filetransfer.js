@@ -115,7 +115,11 @@ class FileTransfer extends EventEmitter {
     // metaTo:写入元数据的会话归属。私聊=对方 id;群聊(room)=群 id(否则接收端会归错会话)
     if (metaTo == null) metaTo = toId
     let size = 0
-    try { size = fs.statSync(filePath).size } catch (_) { this.emit('failed', { mid }); return { mid, error: '文件不存在' } }
+    try {
+      const st = fs.statSync(filePath)
+      if (st.isDirectory()) { this.emit('failed', { mid, canceled: true }); return { mid, error: '不支持发送文件夹' } } // canceled:true 抑制对端/本端失败提示
+      size = st.size
+    } catch (_) { this.emit('failed', { mid }); return { mid, error: '文件不存在' } }
     const fname = path.basename(filePath)
     const mime = guessMime(fname)
     const peer = this.resolvePeer(toId)

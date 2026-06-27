@@ -45,10 +45,27 @@ function localIPv4Interfaces () {
   for (const key of Object.keys(ifaces)) {
     for (const ni of ifaces[key] || []) {
       const fam = typeof ni.family === 'string' ? ni.family : 'IPv' + ni.family
-      if (fam === 'IPv4' && !ni.internal) out.push(ni)
+      if (fam === 'IPv4' && !ni.internal) out.push({ ...ni, ifname: key })
     }
   }
   return out
+}
+
+// 虚拟网卡名（Hyper-V/WSL/VPN/虚拟机等），它们的 IP 不是真实局域网出口
+const VIRTUAL_IF = /vEthernet|Hyper-?V|Default Switch|VMware|VirtualBox|VBox|WSL|Loopback|Bluetooth|TAP|VPN|Tailscale|ZeroTier|Npcap|Docker/i
+function privateRank (addr) {
+  if (addr.startsWith('192.168.')) return 3
+  if (addr.startsWith('10.')) return 2
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(addr)) return 1
+  return 0 // 公网/其它，最低优先
+}
+// 选真实局域网 IP：先排除虚拟网卡，再按常见私网段优先；空则回退 127.0.0.1
+// ponytail: 网卡名+网段启发式，比盲取 ifs[0] 可靠；要 100% 精准可改用 dgram connect 探测默认路由源 IP
+function bestLocalIp (ifs) {
+  if (!ifs.length) return '127.0.0.1'
+  const physical = ifs.filter((ni) => !VIRTUAL_IF.test(ni.ifname || ''))
+  const pool = physical.length ? physical : ifs
+  return pool.slice().sort((a, b) => privateRank(b.address) - privateRank(a.address))[0].address
 }
 
 function broadcastAddr (ni) {
@@ -106,8 +123,7 @@ class P2P extends EventEmitter {
     this.discoveryPort = validPort(opts.discoveryPort)
     this.broadcastAddrs = parseBroadcastAddrs(opts.broadcastAddrs)
     this.disableDiscovery = !!opts.disableDiscovery
-    const ifs = localIPv4Interfaces()
-    this.localIp = ifs.length ? ifs[0].address : '127.0.0.1'
+    this.localIp = bestLocalIp(localIPv4Interfaces())
   }
 
   displayName () { return this.anonymous ? '匿名' : this.name }
@@ -152,6 +168,7 @@ class P2P extends EventEmitter {
     const sig = this._interfaceSignature()
     if (this._ifSig != null && sig !== this._ifSig) {
       this._ifSig = sig
+      this.localIp = bestLocalIp(localIPv4Interfaces())
       console.warn('[p2p] 网卡/IP 变化，自动重连')
       this.reconnect('network change')
     }
@@ -665,4 +682,4 @@ class P2P extends EventEmitter {
   }
 }
 
-module.exports = { P2P, DISCOVERY_PORT, MAX_TEXT_CHARS, isTextTooLong }
+module.exports = { P2P, DISCOVERY_PORT, MAX_TEXT_CHARS, isTextTooLong, bestLocalIp, privateRank }

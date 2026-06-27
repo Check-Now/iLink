@@ -107,12 +107,13 @@ class OutboxController {
         const room = currentRoom || it.room
         if (!room || (!currentRoom && !it.allowMissingRoom)) { vault.outboxRemove(peerId, it.mid); continue }
         if (currentRoom && !this._isGroupMember(currentRoom, peerId) && !it.allowNonMember) { vault.outboxRemove(peerId, it.mid); continue }
-        if (!fs.existsSync(it.path)) { vault.outboxRemove(peerId, it.mid); continue }
+        // 路径不存在或是文件夹:永久失败,移除,避免无限重发(文件夹无法作为文件发送)
+        if (!fs.existsSync(it.path) || fs.statSync(it.path).isDirectory()) { vault.outboxRemove(peerId, it.mid); continue }
         this.inFlight.add(it.mid)
         const r = ft.sendFile(peerId, it.path, 'room', it.mid, it.roomId, it.batch || null, !!it.sticker, it.msgMid, it.ts)
         if (r && r.error) this.inFlight.delete(it.mid)
       } else if (it.kind === 'file') {
-        if (!fs.existsSync(it.path)) { vault.outboxRemove(peerId, it.mid); this.setMsgStatusOut(peerId, it.mid, 'failed'); continue }
+        if (!fs.existsSync(it.path) || fs.statSync(it.path).isDirectory()) { vault.outboxRemove(peerId, it.mid); this.setMsgStatusOut(peerId, it.mid, 'failed'); continue }
         this.inFlight.add(it.mid)
         const r = ft.sendFile(peerId, it.path, 'private', it.mid, peerId, it.batch || null, !!it.sticker, it.mid, it.ts)
         if (r && r.error) this.inFlight.delete(it.mid)

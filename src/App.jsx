@@ -347,14 +347,17 @@ function fmtEta (sec) {
 }
 
 // 头像元素：对方消息时把发送者名字显示在头像上方（私聊/群聊一致；自己的消息不显示名字）
-function MsgAvatar ({ spacer, self, name, id, avatar, peerName }) {
+function MsgAvatar ({ spacer, self, name, id, avatar }) {
   if (spacer) return <span className="avatar-spacer" />
-  const av = <Avatar name={self ? '?' : (name || '')} id={self ? (id || 'self') : (id || name || '')} avatar={avatar} size={34} />
-  if (self || !peerName) return av
-  return <div className="avatar-col"><span className="avatar-name" title={peerName}>{peerName}</span>{av}</div>
+  return <Avatar name={self ? '?' : (name || '')} id={self ? (id || 'self') : (id || name || '')} avatar={avatar} size={34} />
+}
+// 发送者名:对方消息且为分组首条(或单条)时,显示在气泡上方
+function SenderName ({ show, peerName }) {
+  if (!show || !peerName) return null
+  return <span className="sender-name" title={peerName}>{peerName}</span>
 }
 
-function FileMsg ({ m, progress, onAccept, onReject, onCancel, onRetry, selfAvatar, peerAvatar, avatarSpacer, hideMeta, metaReactions, peerName }) {
+function FileMsg ({ m, progress, onAccept, onReject, onCancel, onRetry, selfAvatar, peerAvatar, avatarSpacer, firstOfGroup, hideMeta, metaReactions, peerName }) {
   const isImg = m.mime && m.mime.indexOf('image/') === 0
   const offer = m.type === 'file-offer'
   const pct = progress && progress.size ? Math.min(100, Math.round((progress.received / progress.size) * 100)) : null
@@ -365,6 +368,7 @@ function FileMsg ({ m, progress, onAccept, onReject, onCancel, onRetry, selfAvat
     <div className={'group message-row ' + (m.self ? 'message-row-self' : 'message-row-other')}>
       {!m.self && avEl}
       <div className="message-stack max-w-[75%]">
+        <SenderName show={!m.self && firstOfGroup} peerName={peerName} />
         <div className={'rounded-2xl px-3 py-2 text-sm ' + (m.self ? 'bubble-self' : 'bubble-other')}>
         {isImg && m.dataUrl ? (
           <StaticImg src={m.dataUrl} alt={m.fname} onClick={() => !m.sticker && m.path && api.file.open(m.path)} className={'rounded-lg max-w-[240px] max-h-60 object-contain' + (m.sticker ? '' : ' cursor-pointer')} />
@@ -382,21 +386,21 @@ function FileMsg ({ m, progress, onAccept, onReject, onCancel, onRetry, selfAvat
         {offer && <div className="mt-2 flex gap-2"><button onClick={() => onAccept(m.mid)} className="btn-primary text-xs rounded px-2 py-1">接收</button><button onClick={() => onReject(m.mid)} className="btn-ghost text-xs rounded px-2 py-1">拒绝</button></div>}
           {!offer && m.path && !m.sticker && <div className="mt-1 flex gap-3 text-[11px] opacity-70"><button onClick={() => api.file.open(m.path)} className="hover:underline">打开</button><button onClick={() => api.file.showInFolder(m.path)} className="hover:underline">打开所在文件夹</button></div>}
         </div>
-        {!hideMeta && (
-          <div className="message-meta">
-            {Object.keys(rx).length > 0 && (
-              <div className="message-reactions">{Object.entries(rx).map(([e, ids]) => <span key={e} className="message-reaction">{e} {ids.length}</span>)}</div>
-            )}
-            <span className="message-time">{fmtTime(m.ts)}</span>
-          </div>
-        )}
       </div>
       {m.self && avEl}
+      {!hideMeta && (
+        <div className="message-meta">
+          {Object.keys(rx).length > 0 && (
+            <div className="message-reactions">{Object.entries(rx).map(([e, ids]) => <span key={e} className="message-reaction">{e} {ids.length}</span>)}</div>
+          )}
+          <span className="message-time">{fmtTime(m.ts)}</span>
+        </div>
+      )}
     </div>
   )
 }
 
-function BatchMsg ({ items, markdown, selfAvatar, peerAvatar, progressMap, flashMid, onCtx, avatarSpacer, hideMeta, metaReactions, mentionNames, peerName }) {
+function BatchMsg ({ items, markdown, selfAvatar, peerAvatar, progressMap, flashMid, onCtx, avatarSpacer, firstOfGroup, hideMeta, metaReactions, mentionNames, peerName }) {
   const first = items[0]
   const selfMsg = !!first.self
   const texts = items.filter((x) => x.type !== 'file' && x.type !== 'file-offer' && x.text)
@@ -420,6 +424,7 @@ function BatchMsg ({ items, markdown, selfAvatar, peerAvatar, progressMap, flash
     <div className={'message-row ' + (selfMsg ? 'message-row-self' : 'message-row-other')}>
       {!selfMsg && avEl}
       <div className="message-stack max-w-[75%]">
+        <SenderName show={!selfMsg && firstOfGroup} peerName={peerName} />
         {/* 无文字时，群内昵称单独显示在附件上方 */}
         {/* 绗竴琛?图片缂╃暐鍥?*/}
         {imgs.length > 0 && (
@@ -456,16 +461,16 @@ function BatchMsg ({ items, markdown, selfAvatar, peerAvatar, progressMap, flash
             ))}
           </div>
         )}
-        {!hideMeta && (
-          <div className="message-meta">
-            {Object.keys(reactions).length > 0 && (
-              <div className="message-reactions">{Object.entries(reactions).map(([e, ids]) => <span key={e} className="message-reaction">{e} {ids.length}</span>)}</div>
-            )}
-            <span className="message-time">{fmtTime(first.ts)}</span>
-          </div>
-        )}
       </div>
       {selfMsg && avEl}
+      {!hideMeta && (
+        <div className="message-meta">
+          {Object.keys(reactions).length > 0 && (
+            <div className="message-reactions">{Object.entries(reactions).map(([e, ids]) => <span key={e} className="message-reaction">{e} {ids.length}</span>)}</div>
+          )}
+          <span className="message-time">{fmtTime(first.ts)}</span>
+        </div>
+      )}
     </div>
   )
 }
@@ -566,9 +571,7 @@ function MsgStatus ({ m, onRetry }) {
   if (!m || !m.self || m.burn || !m.status) return null
   const s = m.status
   if (s === 'queued') return <Clock size={11} className="message-status" style={{ color: '#f59e0b' }} title="对方离线，已暂存，上线后自动发送" />
-  if (s === 'sending') return <Clock size={11} className="message-status txt-dim" title="发送中" />
-  if (s === 'sent') return <Check size={11} className="message-status txt-dim" title="已发送" />
-  if (s === 'delivered') return <CheckCheck size={11} className="message-status accent-txt" title="已送达" />
+  // 送达/进行中(sending/sent/delivered)不再提示，只保留暂存与失败
   if (s === 'failed') return (
     <button onClick={(e) => { e.stopPropagation(); onRetry && onRetry(m) }} className="message-status text-red-400 inline-flex items-center gap-0.5" title="发送失败，点击重试">
       <AlertCircle size={11} /><RefreshCw size={10} />
@@ -577,7 +580,7 @@ function MsgStatus ({ m, onRetry }) {
   return null
 }
 
-function Bubble ({ m, now, markdown, selectMode, selected, onToggleSelect, selfAvatar, peerAvatar, avatarSpacer, hideMeta, metaReactions, onRetry, mentionNames, peerName }) {
+function Bubble ({ m, now, markdown, selectMode, selected, onToggleSelect, selfAvatar, peerAvatar, avatarSpacer, firstOfGroup, hideMeta, metaReactions, onRetry, mentionNames, peerName }) {
   // 阅后即焚：剩余时间占比(0~1)，用于进度条展示
   const burnTotal = (m.ttl || 10) * 1000
   const burnFrac = m.burn ? Math.max(0, Math.min(1, (m.ts + burnTotal - now) / burnTotal)) : 0
@@ -590,12 +593,15 @@ function Bubble ({ m, now, markdown, selectMode, selected, onToggleSelect, selfA
       {selectMode && <input type="checkbox" checked={!!selected} onChange={() => onToggleSelect(m.mid)} className="accent-emerald-500" />}
       {!m.self && avEl}
       <div className="message-stack max-w-[75%]">
+      <SenderName show={!m.self && firstOfGroup} peerName={peerName} />
       <div className={'rounded-2xl px-3 py-2 text-sm ' + cls}>
         {m.fwd && <div className="text-[10.5px] opacity-75 mb-0.5 inline-flex items-center gap-1"><Forward size={10} /> 转发自 {localizeKnownNamesText(m.fwd.name, mentionNames)}{m.fwd.count ? `（共 ${m.fwd.count} 条）` : ''}</div>}
         {m.reply && <div className="mb-1 px-2 py-1 rounded-lg text-[11px] opacity-80" style={{ borderLeft: '2px solid var(--accent)', background: 'rgba(0,0,0,0.12)' }}><span className="font-medium">{localizeKnownNamesText(m.reply.name, mentionNames)}</span>:{localizeMentionsText(m.reply.text, mentionNames)}</div>}
         <div className="whitespace-pre-wrap break-words">{m.recalled ? <span className="italic opacity-60">[已撤回]</span> : renderRich(m.text || '', markdown, mentionNames)}</div>
         {m.burn && <span className="burn-bar burn-bar-bubble"><span className="burn-bar-fill" style={{ width: (burnFrac * 100) + '%' }} /></span>}
       </div>
+      </div>
+      {m.self && avEl}
       {!hideMeta && (
         <div className="message-meta">
           {Object.keys(rx).length > 0 && (
@@ -605,13 +611,11 @@ function Bubble ({ m, now, markdown, selectMode, selected, onToggleSelect, selfA
           <MsgStatus m={m} onRetry={onRetry} />
         </div>
       )}
-      </div>
-      {m.self && avEl}
     </div>
   )
 }
 
-function ShareEntryMsg ({ m, onOpen, selfAvatar, peerAvatar, avatarSpacer, hideMeta, metaReactions, onRetry, peerName }) {
+function ShareEntryMsg ({ m, onOpen, selfAvatar, peerAvatar, avatarSpacer, firstOfGroup, hideMeta, metaReactions, onRetry, peerName }) {
   const sh = m.share || {}
   const isFolder = sh.entryType === 'folder'
   const avatarData = m.self ? selfAvatar : (peerAvatar || m.avatar)
@@ -622,6 +626,7 @@ function ShareEntryMsg ({ m, onOpen, selfAvatar, peerAvatar, avatarSpacer, hideM
     <div className={'group message-row ' + (m.self ? 'message-row-self' : 'message-row-other')}>
       {!m.self && avEl}
       <div className="message-stack max-w-[75%]">
+        <SenderName show={!m.self && firstOfGroup} peerName={peerName} />
         <button type="button" onClick={() => onOpen && onOpen(sh)} className={'share-entry-card ' + (m.self ? 'share-entry-card-self' : '')} title="打开群空间对应位置">
           <span className="share-entry-icon">{isFolder ? <Folder size={18} /> : <FileIcon size={18} />}</span>
           <span className="min-w-0 flex-1 text-left">
@@ -631,17 +636,17 @@ function ShareEntryMsg ({ m, onOpen, selfAvatar, peerAvatar, avatarSpacer, hideM
           </span>
           <ChevronRight size={15} className="txt-dim shrink-0" />
         </button>
-        {!hideMeta && (
-          <div className="message-meta">
-            {Object.keys(rx).length > 0 && (
-              <div className="message-reactions">{Object.entries(rx).map(([e, ids]) => <span key={e} className="message-reaction">{e} {ids.length}</span>)}</div>
-            )}
-            <span className="message-time">{fmtTime(m.ts)}</span>
-            <MsgStatus m={m} onRetry={onRetry} />
-          </div>
-        )}
       </div>
       {m.self && avEl}
+      {!hideMeta && (
+        <div className="message-meta">
+          {Object.keys(rx).length > 0 && (
+            <div className="message-reactions">{Object.entries(rx).map(([e, ids]) => <span key={e} className="message-reaction">{e} {ids.length}</span>)}</div>
+          )}
+          <span className="message-time">{fmtTime(m.ts)}</span>
+          <MsgStatus m={m} onRetry={onRetry} />
+        </div>
+      )}
     </div>
   )
 }
@@ -1596,13 +1601,14 @@ function ShotScreen () {
             {annos.length > 0 && <button onClick={() => setAnnos((p) => p.slice(0, -1))} style={toolBtn(false)} title="撤销上一项">撤销</button>}
           </div>
           <div style={{ display: 'flex', gap: 6 }}>
-            {[{ k: 'save', label: '保存' }, { k: 'cancel', label: '取消' }, { k: 'send', label: '发送' }].map((b) => (
+            {[{ k: 'save', label: '保存' }, { k: 'cancel', label: '取消' }, { k: 'send', label: '完成' }].map((b) => (
               <button
                 key={b.k}
                 onClick={() => (b.k === 'cancel' ? api.shot.cancel() : act(b.k))}
-                style={{ flex: 1, fontSize: 12, padding: '5px 12px', borderRadius: 7, border: 'none', cursor: 'pointer', color: b.k === 'send' ? '#fff' : '#ddd', background: b.k === 'send' ? '#4f8cff' : 'rgba(255,255,255,0.1)' }}
+                title={b.k === 'send' ? '完成：复制到剪贴板并加入发送框' : b.k === 'cancel' ? '取消' : b.label}
+                style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, padding: '5px 12px', borderRadius: 7, border: 'none', cursor: 'pointer', color: b.k === 'send' ? '#fff' : '#ddd', background: b.k === 'send' ? '#22c55e' : 'rgba(255,255,255,0.1)' }}
               >
-                {b.label}
+                {b.k === 'send' ? <Check size={15} strokeWidth={3} /> : b.k === 'cancel' ? <X size={15} strokeWidth={2.5} /> : b.label}
               </button>
             ))}
           </div>
@@ -2206,6 +2212,7 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
   const [sharePanel, setSharePanel] = useState(false) // 群文件面板
   const [sharePanelTarget, setSharePanelTarget] = useState(null)
   const [sideTab, setSideTab] = useState('recent')
+  const autoLocateDone = useRef(false) // “最近”为空时自动切到“全部”，仅初次定位一次，避免之后点“最近”被反复弹走
   const [sideQuery, setSideQuery] = useState('') // 会话列表搜索，仅前端过滤展示
   const [sideFocusId, setSideFocusId] = useState(null) // 双击分页时高亮聚焦的未读会话（不打开聊天框）
   const [atBottom, setAtBottom] = useState(true)
@@ -2793,17 +2800,29 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
     setPendingAtts((prev) => prev.filter((_, i) => i !== idx))
   }
   // 拖到发送框：暂存待发（图片显示缩略图），与原有功能一致
+  // 从拖放事件提取文件，过滤掉文件夹（文件夹无法作为单文件发送，发送会在对端读取失败）
+  function filesFromDropEvent (e) {
+    const items = Array.from(e.dataTransfer.items || []).filter((it) => it.kind === 'file')
+    const files = Array.from(e.dataTransfer.files || [])
+    let hadDir = false
+    const kept = files.filter((f, i) => {
+      const entry = items[i] && items[i].webkitGetAsEntry ? items[i].webkitGetAsEntry() : null
+      if (entry && entry.isDirectory) { hadDir = true; return false }
+      return !!f.path
+    })
+    if (hadDir) showChatNotice('暂不支持发送文件夹，请压缩为文件后再发送')
+    return kept
+  }
   function onDropFiles (e) {
     e.preventDefault()
-    const items = Array.from(e.dataTransfer.files || [])
-      .filter((f) => f.path)
+    const items = filesFromDropEvent(e)
       .map((f) => ({ path: f.path, name: f.name, size: f.size, preview: (f.type || '').startsWith('image/') ? URL.createObjectURL(f) : '' }))
     if (items.length) setPendingAtts((prev) => [...prev, ...items])
   }
   // 拖到聊天区：单/多个文件均立即发送
   function sendDroppedFilesDirect (e) {
     e.preventDefault()
-    const paths = Array.from(e.dataTransfer.files || []).filter((f) => f.path).map((f) => f.path)
+    const paths = filesFromDropEvent(e).map((f) => f.path)
     if (!paths.length) return
     const batch = paths.length > 1 ? ('b-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7)) : null
     sendFiles(paths, batch) // 内部已校验在线状态并提示
@@ -3479,6 +3498,18 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
     preview: msgPreview(item.id, item.subtitle),
     timeLabel: sideTime(item.last ? item.last.ts : 0),
   }))
+  // 初次加载：若停在“最近”且最近为空（但已有会话），自动定位到“全部”。只定位一次。
+  useEffect(() => {
+    if (autoLocateDone.current) return
+    if (sideTab !== 'recent') { autoLocateDone.current = true; return }
+    if (!conversationItems.length) return // 会话尚未加载，等下次渲染再判断
+    const hasRecent = conversationItems.some((item) => {
+      const meta = recent[item.id] || {}
+      return !!(meta.lastActiveTime || item.lastTs) && !meta.hiddenInRecent
+    })
+    if (!hasRecent) setSideTab('all')
+    autoLocateDone.current = true
+  }, [sideTab, conversationItems, recent])
   // “最近”分页汇总未读数（与托盘总数口径一致，含免打扰会话）；不受搜索过滤影响
   let recentUnread = 0
   for (const item of conversationItems) {
@@ -3503,16 +3534,12 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
       return true
     })
     .sort((a, b) => {
+      // 所有页签一致：置顶优先,再按最后一条消息时间(lastTs)。
+      // 点击/打开不改 lastTs,故不会重排;仅收发消息更新 lastTs 时才重排。
       const pa = isPinned(a.id) ? 0 : 1
       const pb = isPinned(b.id) ? 0 : 1
       if (pa !== pb) return pa - pb
-      if (sideTab === 'recent') {
-        const ra = (recent[a.id] && recent[a.id].lastActiveTime) || a.lastTs || 0
-        const rb = (recent[b.id] && recent[b.id].lastActiveTime) || b.lastTs || 0
-        return rb - ra || a.title.localeCompare(b.title)
-      }
-      if (sideTab === 'all') return (b.lastTs || 0) - (a.lastTs || 0) || a.title.localeCompare(b.title)
-      return a.title.localeCompare(b.title)
+      return (b.lastTs || 0) - (a.lastTs || 0) || a.title.localeCompare(b.title)
     })
   // 双击当前分页：依次滚动聚焦到下一条未读会话（私聊/群聊），仅高亮不打开聊天框
   function focusNextUnread (tab) {
@@ -3742,10 +3769,12 @@ function ChatScreen ({ onLock, onReset, setDisplay, standaloneConv }) {
                   {sep && <div className="flex justify-center"><span className="day-sep">{day}</span></div>}
                   {sg.units.map((u, ui) => {
                     const isLastU = ui === sg.units.length - 1
+                    const isFirstU = ui === 0
                     const m = u.items[0]
                     const shared = {
-                      avatarSpacer: multi && !isLastU,
-                      hideMeta: multi && !isLastU,
+                      avatarSpacer: multi && !isLastU, // 头像锚到分组末条(底部)
+                      firstOfGroup: isFirstU,           // 发送者名锚到分组首条(顶部)
+                      hideMeta: multi && !isLastU,      // 时间仍在分组末条
                       metaReactions: multi && isLastU ? mergedR : undefined,
                     }
                     // 同批次文字和多附件单元

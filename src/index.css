@@ -199,7 +199,7 @@ body {
   justify-content: flex-end;
   gap: 8px;
   flex-wrap: wrap;
-  margin-top: 16px;
+  margin-top: 20px;
 }
 .floating-subtle {
   color: var(--text-dim);
@@ -359,7 +359,8 @@ body {
 .message-row {
   display: flex;
   align-items: flex-end;
-  gap: 10px;
+  gap: 4px 10px; /* 行间(meta 换行)4px,列间(头像-气泡)10px */
+  flex-wrap: wrap;
 }
 .message-row-other {
   justify-content: flex-start;
@@ -370,9 +371,13 @@ body {
 .message-row .avatar {
   width: 34px;
   height: 34px;
-  align-self: flex-end;
+  align-self: flex-end; /* 头像底部与同行末条气泡底部对齐(meta 已换到独立行,不再拉低) */
   flex-shrink: 0;
 }
+/* meta(时间/回应)换到气泡下方独立一行,缩进对齐气泡,不影响头像与气泡的底对齐 */
+.message-meta { flex-basis: 100%; }
+.message-row-other .message-meta { padding-left: 44px; }
+.message-row-self .message-meta { padding-right: 44px; }
 .message-stack {
   display: flex;
   flex-direction: column;
@@ -666,7 +671,7 @@ body {
   line-height: 1.2;
 }
 .composer-box {
-  padding: 13px 18px 15px;
+  padding: 12px 16px 14px;
 }
 .composer-tools {
   gap: 2px;
@@ -1054,8 +1059,14 @@ button:hover > .avatar { transform: scale(1.07); }
 
 /* TG 式发送者分组:头像占位保持对齐,组内行距收紧 */
 .avatar-spacer { width: 34px; flex: none; }
-.avatar-col { display: flex; flex-direction: column; align-items: center; gap: 2px; flex: none; }
-.avatar-name { max-width: 60px; font-size: 11px; line-height: 1.1; color: var(--text-dim); text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 发送者名:置于气泡上方内容列(左对齐),非浮层,空间充足且不撑动头像/气泡对齐 */
+.sender-name {
+  align-self: flex-start;
+  max-width: 100%;
+  margin: 0 4px 3px;
+  font-size: 11px; line-height: 1.2; font-weight: 600; color: var(--text-dim);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .msg-group > div + div { margin-top: 3px; }
 .batch-file-card {
   background: var(--bubble-other);

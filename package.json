@@ -2,9 +2,18 @@
   "name": "freedom",
   "productName": "iLink",
   "version": "0.0.0",
-  "description": "iLink — Windows 局域网 P2P 加密通讯工具",
+  "description": "iLink - a Windows LAN P2P encrypted messenger",
   "private": true,
   "author": "iLink",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Check-Now/iLink.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Check-Now/iLink/issues"
+  },
+  "homepage": "https://github.com/Check-Now/iLink#readme",
   "main": "electron/main.js",
   "scripts": {
     "dev": "concurrently -k -n VITE,ELECTRON -c cyan,green \"vite\" \"wait-on tcp:127.0.0.1:5173 && cross-env NODE_ENV=development electron .\"",
@@ -21,9 +30,11 @@
   "build": {
     "appId": "com.freedom.lan",
     "productName": "iLink",
+    "electronDist": "node_modules/electron/dist",
+    "artifactName": "Freedom.${ext}",
     "files": ["dist/**", "electron/**", "icon.png", "package.json"],
     "directories": { "output": "release" },
-    "win": { "icon": "icon.png" }
+    "win": { "icon": "build/icon.png", "target": ["zip"], "signAndEditExecutable": false }
   },
   "dependencies": {
     "framer-motion": "^11.0.0",
