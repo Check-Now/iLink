@@ -10,7 +10,7 @@
   --win-radius: 22px;
 
   --text: #eceef5;
-  --text-dim: #7f828f;
+  --text-dim: #9194a0;
   --accent: #7c86f0;
   --accent-soft: #9098f5;
   --accent-text: #ffffff;
@@ -49,7 +49,7 @@
 
 [data-theme='light'] {
   --text: #1c1d22;
-  --text-dim: #8a8c96;
+  --text-dim: #6e7180;
   --accent: #4f5bd5;
   --accent-soft: #6670e0;
   --accent-text: #ffffff;
@@ -1037,6 +1037,8 @@ button:hover > .avatar { transform: scale(1.07); }
 
 /* TG 式发送者分组:头像占位保持对齐,组内行距收紧 */
 .avatar-spacer { width: 34px; flex: none; }
+.avatar-col { display: flex; flex-direction: column; align-items: center; gap: 2px; flex: none; }
+.avatar-name { max-width: 60px; font-size: 11px; line-height: 1.1; color: var(--text-dim); text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .msg-group > div + div { margin-top: 3px; }
 .batch-file-card {
   background: var(--bubble-other);
@@ -1087,7 +1089,7 @@ button:hover > .avatar { transform: scale(1.07); }
 
 /* 1. 极简主义 Minimalist:纯白 + 蓝色气泡 */
 [data-style='minimal'] {
-  --text: #1f2937; --text-dim: #9ca3af;
+  --text: #1f2937; --text-dim: #6b7280;
   --accent: #1d7bff; --accent-soft: #4a95ff; --accent-text: #fff; --accent-tint: rgba(29, 123, 255, 0.12);
   --panel-rgb: 255, 255, 255; --border-hi: rgba(0, 0, 0, 0.12); --border-soft: rgba(0, 0, 0, 0.07);
   --bubble-other: #f1f2f5; --message-other-bg: #f1f2f5; --hover: rgba(0, 0, 0, 0.05); --field: #f1f2f5;
@@ -1124,7 +1126,7 @@ button:hover > .avatar { transform: scale(1.07); }
 
 /* 4. 拟真风格 Skeuomorphic:皮革顶栏 + 米纸聊天底 + 浅绿气泡 */
 [data-style='skeuo'] {
-  --text: #3a2f23; --text-dim: #8d7c64;
+  --text: #3a2f23; --text-dim: #6e5d44;
   --accent: #4caf50; --accent-soft: #66bb6a; --accent-text: #fff; --accent-tint: rgba(76, 175, 80, 0.15);
   --panel-rgb: 249, 243, 233; --border-hi: rgba(58, 47, 35, 0.2); --border-soft: rgba(58, 47, 35, 0.12);
   --bubble-other: #ffffff; --message-other-bg: #ffffff; --hover: rgba(58, 47, 35, 0.06); --field: #ffffff;
@@ -1162,7 +1164,7 @@ button:hover > .avatar { transform: scale(1.07); }
 
 /* 6. 扁平化设计 Flat:青绿主色 + 零阴影 + 青绿聊天顶栏 */
 [data-style='flat'] {
-  --text: #263238; --text-dim: #90a4ae;
+  --text: #263238; --text-dim: #5f7885;
   --accent: #00897b; --accent-soft: #26a69a; --accent-text: #fff; --accent-tint: rgba(0, 137, 123, 0.12);
   --panel-rgb: 255, 255, 255; --border-hi: rgba(0, 0, 0, 0.1); --border-soft: rgba(0, 0, 0, 0.07);
   --bubble-other: #eceff1; --message-other-bg: #eceff1; --hover: rgba(0, 0, 0, 0.05); --field: #eceff1;
@@ -1182,7 +1184,7 @@ button:hover > .avatar { transform: scale(1.07); }
 
 /* 7. 新拟态 Neumorphism:浅灰软浮雕,双向光影 */
 [data-style='neu'] {
-  --text: #3a3f4c; --text-dim: #9aa1b3;
+  --text: #3a3f4c; --text-dim: #5a6275;
   --accent: #5b7cfa; --accent-soft: #7b96fb; --accent-text: #fff; --accent-tint: rgba(91, 124, 250, 0.16);
   --panel-rgb: 230, 233, 240; --border-hi: rgba(28, 29, 34, 0.12); --border-soft: rgba(28, 29, 34, 0.06);
   --bubble-other: #e6e9f0; --message-other-bg: #e6e9f0; --hover: rgba(91, 124, 250, 0.08); --field: #e6e9f0;
@@ -1220,7 +1222,7 @@ button:hover > .avatar { transform: scale(1.07); }
 
 /* 9. 卡片式设计 Card-based:浅灰底 + 白色卡片气泡 */
 [data-style='card'] {
-  --text: #1f2430; --text-dim: #8a93a3;
+  --text: #1f2430; --text-dim: #606878;
   --accent: #1d7bff; --accent-soft: #4a95ff; --accent-text: #fff; --accent-tint: rgba(29, 123, 255, 0.1);
   --panel-rgb: 255, 255, 255; --border-hi: rgba(0, 0, 0, 0.12); --border-soft: rgba(0, 0, 0, 0.08);
   --bubble-other: #ffffff; --message-other-bg: #ffffff; --hover: rgba(0, 0, 0, 0.04); --field: #ffffff;
@@ -1232,7 +1234,7 @@ button:hover > .avatar { transform: scale(1.07); }
 
 /* 10. 手绘风格 Hand-drawn:米纸底 + 黑描边气泡 + 手写字体 */
 [data-style='hand'] {
-  --text: #2b2b2b; --text-dim: #8d8678;
+  --text: #2b2b2b; --text-dim: #6b6054;
   --accent: #4a7c43; --accent-soft: #6b9a62; --accent-text: #fff; --accent-tint: rgba(74, 124, 67, 0.14);
   --panel-rgb: 253, 248, 234; --border-hi: rgba(43, 43, 43, 0.5); --border-soft: rgba(43, 43, 43, 0.3);
   --bubble-other: #ffffff; --message-other-bg: #ffffff; --hover: rgba(43, 43, 43, 0.06); --field: #fffdf4;
